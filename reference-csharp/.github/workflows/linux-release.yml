@@ -1,0 +1,147 @@
+﻿name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-standalone:
+    runs-on: ubuntu-latest
+    outputs:
+      ZIP_NAME: ${{ steps.setzip.outputs.ZIP_NAME }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish Linux
+        id: setzip
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+
+          PUBLISH_DIR="$GITHUB_WORKSPACE/QuicFileSharing.GUI/bin/Release/net9.0/linux-x64/publish"
+
+          dotnet publish ./QuicFileSharing.GUI/QuicFileSharing.GUI.csproj \
+            -c Release \
+            -r linux-x64 \
+            --self-contained true \
+            /p:UseAppHost=true \
+            /p:Version=$VERSION
+
+          cp ./QuicFileSharing.Core/runtimes/linux-x64/native/libmsquic.so "$PUBLISH_DIR/"
+
+          ZIP_NAME="QuicShare-v${VERSION}-linux-x64.zip"
+
+          cd "$PUBLISH_DIR"
+          zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" .
+
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: ${{ steps.setzip.outputs.ZIP_NAME }}
+
+  build-flatpak:
+    runs-on: ubuntu-latest
+    outputs:
+      FLATPAK_NAME: ${{ steps.setflatpak.outputs.FLATPAK_NAME }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Publish Linux and prepare flatpak folder
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+
+          # Hardcoded paths
+          PUBLISH_DIR="/home/runner/work/QuicShare/QuicShare/QuicFileSharing.GUI/bin/Release/net9.0/linux-x64/publish"
+          FLATPAK_DIR="/home/runner/work/QuicShare/QuicShare/flatpak"
+
+          # Publish GUI project
+          dotnet publish /home/runner/work/QuicShare/QuicShare/QuicFileSharing.GUI/QuicFileSharing.GUI.csproj \
+            -c Release -r linux-x64 --self-contained true \
+            /p:UseAppHost=true /p:Version=$VERSION
+
+          # Copy native library to flatpak folder
+          cp /home/runner/work/QuicShare/QuicShare/QuicFileSharing.Core/runtimes/linux-x64/native/libmsquic.so "$FLATPAK_DIR/"
+
+          # Make the main binary executable
+          chmod +x "$PUBLISH_DIR/QuicShare"
+
+          # Copy icon and published binaries to flatpak folder
+          cp /home/runner/work/QuicShare/QuicShare/QuicFileSharing.GUI/Assets/icon.png "$FLATPAK_DIR/"
+          cp "$PUBLISH_DIR/"* "$FLATPAK_DIR/"
+
+          sed -i "s/^app-version:.*/app-version: $VERSION/" flatpak/io.github.zemendaniel.QuicShare.yaml
+
+      - name: Install Flatpak tools
+        run: |
+          sudo apt update
+          sudo apt install -y flatpak flatpak-builder
+          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y --user flathub org.freedesktop.Sdk//25.08
+          flatpak install -y --user flathub org.freedesktop.Platform//25.08
+
+      - name: Build Flatpak Repo
+        run: |
+          cd /home/runner/work/QuicShare/QuicShare/flatpak
+          flatpak-builder --force-clean --repo=/home/runner/work/QuicShare/QuicShare/flatpak/repo build-dir io.github.zemendaniel.QuicShare.yaml
+
+      - name: Build Flatpak Bundle
+        run: |
+          cd /home/runner/work/QuicShare/QuicShare/flatpak
+          flatpak build-bundle /home/runner/work/QuicShare/QuicShare/flatpak/repo \
+            /home/runner/work/QuicShare/QuicShare/flatpak/QuicShare.flatpak \
+            io.github.zemendaniel.QuicShare master
+
+      - name: Upload Flatpak Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: /home/runner/work/QuicShare/QuicShare/flatpak/QuicShare.flatpak
+
+      - name: Set FLATPAK_NAME output
+        id: setflatpak
+        run: |
+          echo "FLATPAK_NAME=QuicShare.flatpak" >> $GITHUB_OUTPUT
+  
+  release:
+    needs: [build-standalone, build-flatpak]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: .
+
+      - name: Download Flatpak Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: flatpak
+          path: .
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ${{ needs.build-standalone.outputs.ZIP_NAME }}
+            ${{ needs.build-flatpak.outputs.FLATPAK_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}

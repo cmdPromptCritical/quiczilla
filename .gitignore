@@ -1,0 +1,30 @@
+# Node
+node_modules/
+dist/
+
+# Rust / Cargo
+src-tauri/target/
+target/
+**/*.rs.bk
+
+# Release CI staging (embedded at build time; never committed)
+cli/embedded/msquic-linux-x86_64.so
+cli/embedded/msquic-windows-x86_64.dll
+
+# Tauri
+src-tauri/gen/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Test files & benchmarks
+*.bin
+*.txt
+benchmark-*.json
+scratch/
+.agent/

@@ -1,0 +1,107 @@
+name: Build Windows Installers & Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on tags like v1.0, v1.1, etc.
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Determine version
+        id: set_version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -match 'refs/tags/(.+)') {
+              $ver = $Matches[1]
+          } else {
+              $ver = git describe --tags --always
+          }
+          # Remove leading 'v' if present
+          $ver = $ver -replace '^v', ''
+          echo "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8
+      
+      - name: Create artifacts folder
+        run: mkdir "$env:GITHUB_WORKSPACE\artifacts"
+
+      # -------------------------
+      # Windows x64
+      # -------------------------
+      - name: Publish Windows x64
+        run: |
+          dotnet publish .\QuicFileSharing.GUI\QuicFileSharing.GUI.csproj -c Release -r win-x64 --self-contained true /p:UseAppHost=true /p:Version=${{ steps.set_version.outputs.version }}
+          echo "PUBLISH_DIR_X64=$env:GITHUB_WORKSPACE\QuicFileSharing.GUI\bin\Release\net9.0\win-x64\publish" >> $GITHUB_ENV
+
+      - name: Generate vars.iss for x64
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.set_version.outputs.version }}'
+          @"
+          #define PublishDir = "..\QuicFileSharing.GUI\bin\Release\net9.0\win-x64\publish"
+          #define AppVersion = "$ver"
+          "@ | Set-Content "$env:GITHUB_WORKSPACE\installer\vars.iss" -Encoding utf8
+      
+      
+      - name: Build x64 installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            "$env:GITHUB_WORKSPACE\installer\QuicShareInstaller.iss" `
+            /O"$env:GITHUB_WORKSPACE\artifacts" `
+            /F"QuicShareInstaller-v${{ steps.set_version.outputs.version }}-win-x64"
+
+      # -------------------------
+      # Windows ARM64
+      # -------------------------
+      - name: Publish Windows ARM64
+        run: |
+          dotnet publish .\QuicFileSharing.GUI\QuicFileSharing.GUI.csproj -c Release -r win-arm64 --self-contained true /p:UseAppHost=true /p:Version=${{ steps.set_version.outputs.version }}
+          echo "PUBLISH_DIR_ARM64=$env:GITHUB_WORKSPACE\QuicFileSharing.GUI\bin\Release\net9.0\win-arm64\publish" >> $GITHUB_ENV
+
+      - name: Generate vars.iss for ARM64
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.set_version.outputs.version }}'
+          @"
+          #define PublishDir = "..\QuicFileSharing.GUI\bin\Release\net9.0\win-arm64\publish"
+          #define AppVersion = "$ver"
+          "@ | Set-Content "$env:GITHUB_WORKSPACE\installer\vars.iss" -Encoding utf8
+      
+      - name: Build ARM64 installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            "$env:GITHUB_WORKSPACE\installer\QuicShareInstaller.iss" `
+            /O"$env:GITHUB_WORKSPACE\artifacts" `
+            /F"QuicShareInstaller-v${{ steps.set_version.outputs.version }}-win-arm64"
+
+      # -------------------------
+      # GitHub Release
+      # -------------------------
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Upload installers to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}

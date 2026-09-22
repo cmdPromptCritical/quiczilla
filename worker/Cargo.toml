@@ -1,0 +1,20 @@
+[package]
+name = "quiczilla-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Remote receiver worker daemon and one-shot transfer agent for Quiczilla"
+
+
+[dependencies]
+quiczilla-core = { path = "../core" }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
+serde_json = "1"
+tokio-util = "0.7"
+hex = "0.4"
+rustls = { version = "0.23.43", default-features = false, features = ["ring", "logging", "std", "tls12"] }

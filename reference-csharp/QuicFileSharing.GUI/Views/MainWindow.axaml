@@ -1,0 +1,473 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:QuicFileSharing.GUI.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:converters="clr-namespace:QuicFileSharing.GUI.Converters"
+        xmlns:models="clr-namespace:QuicFileSharing.GUI.Models"
+        mc:Ignorable="d"
+        x:Class="QuicFileSharing.GUI.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Icon="avares://QuicShare/Assets/icon.png"
+        Title="QuicShare"
+        WindowStartupLocation="CenterScreen"
+        Width="900"
+        MaxWidth="900"
+        Height="500"
+        MaxHeight="500"
+        CanResize="False"
+        SystemDecorations="None"
+        Background="Transparent">
+
+    <Window.Resources>
+        <converters:EnumToBoolConverter x:Key="EnumToBoolConverter"/>
+        <converters:InverseBoolConverter x:Key="InverseBoolConverter"/>
+        
+        <DropShadowEffect x:Key="DropShadow"
+                          BlurRadius="23"
+                          Opacity="0.5"
+                          Color="{DynamicResource DarkShadow}"/>
+        
+        <DropShadowEffect x:Key="TextShadow"
+                          BlurRadius="4"
+                          Opacity="0.15"
+                          Color="{DynamicResource DarkShadow}"/>
+    </Window.Resources>
+
+    <Design.DataContext>
+        <vm:MainWindowViewModel/>
+    </Design.DataContext>
+
+    <Border CornerRadius="12"
+            BorderThickness="0"
+            Padding="0"
+            Background="{DynamicResource SecondaryColor}"
+            ClipToBounds="True">
+
+        <!-- Main layout grid -->
+        <Grid RowDefinitions="Auto,*">
+            
+            <!-- Custom Top Bar -->
+            <Border Grid.Row="0"
+                    Background="{DynamicResource PrimaryColor}"
+                    Effect="{DynamicResource TextShadow}"
+                    Height="30"
+                    PointerPressed="TitleBar_PointerPressed"
+                    CornerRadius="12,12,0,0"
+                    ClipToBounds="True"
+                    VerticalAlignment="Top">
+                <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6">
+                        <TextBlock Text="QuicShare"
+                                   FontWeight="Bold"
+                                   Effect="{DynamicResource TextShadow}"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="2,0,0,0"/>
+                    </StackPanel>
+
+                    <!-- Minimize button -->
+                    <Button Grid.Column="2"
+                            Effect="{DynamicResource TextShadow}"
+                            Width="28"
+                            Height="28"
+                            Padding="5, 4, 0, 0"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            Background="Transparent"
+                            BorderBrush="Transparent"
+                            Click="MinimizeButtonClick">
+    
+                        <!-- Vector icon -->
+                        <Path Stroke="{DynamicResource TextBrush}" StrokeThickness="2">
+                            <Path.Data>
+                                <LineGeometry StartPoint="0,9" EndPoint="14,9"/>
+                            </Path.Data>
+                        </Path>
+                    </Button>
+
+                    <!-- Close button -->
+                    <Button Grid.Column="3"
+                            Effect="{DynamicResource TextShadow}"
+                            Width="28"
+                            Height="28"
+                            VerticalAlignment="Bottom"
+                            HorizontalAlignment="Center"
+                            Background="Transparent"
+                            BorderBrush="Transparent"
+                            Margin="0, 0, 4, 0"
+                            Padding="5, 4, 0, 0"
+                            Click="CloseButton_Click">
+                        <Path Data="M0,0 L12,12 M12,0 L0,12"
+                              Stroke="{DynamicResource TextBrush}"
+                              StrokeThickness="2"
+                              Stretch="Uniform"
+                              RenderTransformOrigin="0.5,0.5">
+                            <Path.RenderTransform>
+                                <ScaleTransform ScaleX="0.7" ScaleY="0.7"/>
+                            </Path.RenderTransform>
+                        </Path>
+                        <Button.Styles>
+                            <Style Selector="Button:hover">
+                                <Setter Property="Background" Value="{DynamicResource TextBrush}"/>
+                            </Style>
+                        </Button.Styles>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- Main content area -->
+            <Grid Grid.Row="1" ClipToBounds="True">
+
+                <!-- Decorative Background Waves -->
+                <Grid VerticalAlignment="Bottom" ZIndex="0">
+                    <Path Fill="{DynamicResource TextBrush}" Opacity="0.2"
+                          Data="M0,389 C225,333 450,444 900,356 L900,500 L0,500 Z"
+                          Stretch="Fill"/>
+                    <Path Fill="{DynamicResource TextBrush}" Opacity="0.1"
+                          Data="M0,422 C281,367 619,467 900,389 L900,500 L0,500 Z"
+                          Stretch="Fill"/>
+                </Grid>
+
+                <!-- Foreground content (centered) -->
+                <Grid Margin="20" ZIndex="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+
+                    <!-- Lobby -->
+                    <StackPanel
+                        IsVisible="{Binding State, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static models:AppState.Lobby}}"
+                        Spacing="20"
+                        Width="400"
+                        VerticalAlignment="Center"
+                        HorizontalAlignment="Center">
+
+                        <Border CornerRadius="12"
+                                Background="{DynamicResource PrimaryBrush}"
+                                Padding="10"
+                                Effect="{DynamicResource DropShadow}">
+                            <TextBlock Foreground="{DynamicResource TextBrush}"
+                                       FontWeight="SemiBold"
+                                       FontSize="24"
+                                       TextAlignment="Center">
+                                What Would You Like To Do?
+                            </TextBlock>
+                        </Border>
+
+                        <!-- Join Existing Room -->
+                        <StackPanel Orientation="Vertical" HorizontalAlignment="Center" Spacing="10">
+                            <TextBlock Foreground="{DynamicResource TextBrush}"
+                                       FontWeight="Bold"
+                                       FontSize="20"
+                                       TextAlignment="Center"
+                                       Effect="{DynamicResource TextShadow}">
+                                Join Existing Room
+                            </TextBlock>
+
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
+                                <TextBox Text="{Binding RoomCode}"
+                                         Width="300"
+                                         Watermark="Enter Code Here..."
+                                         TextAlignment="Center"
+                                         VerticalContentAlignment="Center"
+                                         FontWeight="Bold"
+                                         Padding="8,4"
+                                         CornerRadius="12"
+                                         Background="{DynamicResource TextBrush}"
+                                         Foreground="{DynamicResource PrimaryBrush}"
+                                         Effect="{DynamicResource DropShadow}">
+                                    <TextBox.KeyBindings>
+                                        <KeyBinding Gesture="Enter" Command="{Binding JoinRoomCommand}"/>
+                                    </TextBox.KeyBindings>
+                                </TextBox>
+
+                                <Button Content="Join"
+                                        Command="{Binding JoinRoomCommand}"
+                                        Padding="12,6"
+                                        CornerRadius="12"
+                                        Foreground="{DynamicResource TextBrush}"
+                                        FontWeight="Bold"
+                                        Background="{DynamicResource PrimaryBrush}"
+                                        BorderBrush="{DynamicResource AccentBrush}"
+                                        Effect="{DynamicResource TextShadow}"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- Create New Room -->
+                        <StackPanel Orientation="Vertical" HorizontalAlignment="Center" Spacing="10">
+                            <TextBlock Foreground="{DynamicResource TextBrush}" FontWeight="Bold" FontSize="20" TextAlignment="Center"
+                                       Effect="{DynamicResource TextShadow}">
+                                Create New Room
+                            </TextBlock>
+                            <Button Content="Create Room" Command="{Binding CreateRoomCommand}"
+                                    HorizontalAlignment="Center" Padding="12,6"
+                                    FontWeight="Bold"
+                                    CornerRadius="12"
+                                    Foreground="{DynamicResource TextBrush}"
+                                    Background="{DynamicResource PrimaryBrush}"
+                                    BorderBrush="{DynamicResource AccentBrush}"
+                                    Effect="{DynamicResource TextShadow}"/>
+                        </StackPanel>
+
+                        <TextBlock Text="{Binding LobbyText}"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   FontWeight="SemiBold"
+                                   FontSize="16"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center"
+                                   Effect="{DynamicResource TextShadow}"
+                                   MaxWidth="400"
+                                   Margin="0,10,0,10"/>
+
+                        <!-- Settings -->
+                        <StackPanel Orientation="Vertical" HorizontalAlignment="Center" Spacing="10">
+                            <TextBlock Foreground="{DynamicResource TextBrush}" FontWeight="Bold" FontSize="20" TextAlignment="Center"
+                                       Effect="{DynamicResource TextShadow}">
+                                Change Settings
+                            </TextBlock>
+                            <Button Content="Settings"
+                                    Command="{Binding OpenSettingsCommand}"
+                                    HorizontalAlignment="Center"
+                                    Padding="12,6"
+                                    FontWeight="Bold"
+                                    CornerRadius="12"
+                                    Foreground="{DynamicResource TextBrush}"
+                                    Background="{DynamicResource PrimaryBrush}"
+                                    BorderBrush="{DynamicResource AccentBrush}"
+                                    Effect="{DynamicResource TextShadow}"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- WaitingForConnection -->
+                    <StackPanel
+                        VerticalAlignment="Center"
+                        HorizontalAlignment="Center"
+                        Spacing="20"
+                        Width="400"
+                        IsVisible="{Binding State, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static models:AppState.WaitingForConnection}}">
+                        <Border CornerRadius="12" Background="{DynamicResource PrimaryBrush}" Padding="10"
+                                Effect="{DynamicResource DropShadow}">
+                            <TextBlock Foreground="{DynamicResource TextBrush}"
+                                       FontWeight="SemiBold" FontSize="24" TextAlignment="Center" VerticalAlignment="Center">
+                                Share This Code With Your Peer
+                            </TextBlock>
+                        </Border>
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
+                            <Border CornerRadius="12" Background="{DynamicResource TextBrush}" Padding="8,4">
+                                <SelectableTextBlock Text="{Binding RoomCode}"
+                                                     FontWeight="Bold"
+                                                     FontSize="18"
+                                                     Foreground="{DynamicResource PrimaryBrush}"
+                                                     VerticalAlignment="Center"
+                                                     TextAlignment="Center"
+                                                     Margin="0,0,4,0"/>
+                            </Border>
+
+                            <Button Content="Copy To Clipboard"
+                                    Command="{Binding CopyRoomCodeCommand}"
+                                    CommandParameter="{Binding RelativeSource={RelativeSource AncestorType=Window}}"
+                                    Padding="12,6"
+                                    CornerRadius="12"
+                                    Foreground="{DynamicResource TextBrush}"
+                                    FontWeight="Bold"
+                                    Background="{DynamicResource PrimaryBrush}"
+                                    BorderBrush="{DynamicResource AccentBrush}"/>
+                        </StackPanel>
+
+                        <TextBlock FontWeight="Bold" TextAlignment="Center" FontSize="16"
+                                   Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center"
+                                   Effect="{DynamicResource DropShadow}"
+                                   Text="Waiting for incoming connection..."/>
+                    </StackPanel>
+
+                    <!-- InRoom -->
+                        <StackPanel
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            Spacing="20"
+                            Width="600"
+                            IsVisible="{Binding State, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static models:AppState.InRoom}}">
+
+                            <!-- Header -->
+                            <Border CornerRadius="12" Background="{DynamicResource PrimaryBrush}" Padding="10"
+                                    Effect="{DynamicResource DropShadow}"
+                                    Width="400">
+                                <TextBlock Text="{Binding RoomCode, StringFormat='You Are In Room: {0}'}"
+                                           FontWeight="SemiBold"
+                                           FontSize="24"
+                                           Foreground="{DynamicResource TextBrush}"
+                                           TextAlignment="Center"/>
+                            </Border>
+
+                            <!-- Send File Button -->
+                            <Button Content="Send File"
+                                    Command="{Binding SendFileCommand}"
+                                    CommandParameter="{Binding RelativeSource={RelativeSource AncestorType=Window}}"
+                                    Padding="12,6"
+                                    HorizontalAlignment="Center"
+                                    CornerRadius="12"
+                                    Foreground="{DynamicResource TextBrush}"
+                                    FontWeight="Bold"
+                                    Background="{DynamicResource PrimaryBrush}"
+                                    BorderBrush="{DynamicResource AccentBrush}"
+                                    IsEnabled="{Binding IsTransferInitiated, Converter={StaticResource InverseBoolConverter}}"/>
+
+                            <!-- Receiving Status -->
+                            <TextBlock FontWeight="Bold" FontSize="16" TextAlignment="Center" Margin="0,0,0,20"
+                                       IsVisible="{Binding IsTransferInitiated, Converter={StaticResource InverseBoolConverter}}"
+                                       Foreground="{DynamicResource TextBrush}">
+                                You are open to receiving files.
+                            </TextBlock>
+
+                            <!-- Room Info -->
+                            <TextBlock Text="{Binding RoomText}" TextAlignment="Center" Foreground="{DynamicResource TextBrush}"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Effect="{DynamicResource TextShadow}"
+                                       TextWrapping="Wrap"
+                                       MaxWidth="400"/>
+                            <SelectableTextBlock Text="{Binding FilePath}" TextAlignment="Center" Foreground="{DynamicResource TextBrush}"
+                                                 TextWrapping="Wrap"/>
+
+                            <!-- Progress Section -->
+                            <StackPanel Orientation="Vertical" Margin="10" Spacing="10" Width="600"
+                                        IsVisible="{Binding IsProgressVisible}"
+                                        Effect="{DynamicResource DropShadow}">
+                                <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercentage}" Height="20" Width="400"
+                                             Foreground="{DynamicResource PrimaryBrush}"
+                                             Background="{DynamicResource TextBrush}"/>
+                                <TextBlock Text="{Binding ProgressText}" FontWeight="Bold" 
+                                           Foreground="{DynamicResource TextBrush}" TextAlignment="Center"
+                                           MaxWidth="600" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </StackPanel>
+
+
+                   <!-- Settings -->
+<!-- Settings -->
+<StackPanel
+    VerticalAlignment="Center"
+    HorizontalAlignment="Center"
+    Spacing="16"
+    IsVisible="{Binding State, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static models:AppState.Settings}}">
+
+    <!-- Header -->
+    <Border CornerRadius="12"
+            Background="{DynamicResource PrimaryBrush}"
+            Padding="10"
+            Width="150"
+            Effect="{DynamicResource DropShadow}">
+        <TextBlock Foreground="{DynamicResource TextBrush}"
+                   FontWeight="SemiBold"
+                   FontSize="24"
+                   TextAlignment="Center">
+            Settings
+        </TextBlock>
+    </Border>
+
+    <!-- Info Text -->
+    <TextBlock FontWeight="Bold" FontSize="14" TextAlignment="Center" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap"
+               Effect="{DynamicResource TextShadow}">
+        Leave empty and save to use default values.
+    </TextBlock>
+
+    <!-- First row: Force IPv4 and Port -->
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="50">
+        <CheckBox Content="Force IPv4?" IsChecked="{Binding ForceIPv4}" Foreground="{DynamicResource TextBrush}"
+                  Effect="{DynamicResource TextShadow}"
+                  FontWeight="Bold"
+                  VerticalAlignment="Center"
+                  CornerRadius="6"
+                  BorderBrush="{DynamicResource PrimaryBrush}"/>
+
+        <StackPanel>
+            <TextBlock Foreground="{DynamicResource TextBrush}"
+                       Effect="{DynamicResource TextShadow}"
+                       Margin="0, 0, 0, 6"
+                       FontWeight="Bold">IPv4 port (1-65535):</TextBlock>
+            <NumericUpDown Minimum="1" Maximum="65535" Value="{Binding PortV4Text}"
+                           Increment="1" FormatString="0"
+                           IsEnabled="{Binding ForceIPv4}"
+                           FontWeight="Bold"
+                           ClipToBounds="True"
+                           Foreground="{DynamicResource PrimaryBrush}" 
+                           Background="{DynamicResource TextBrush}" 
+                           CornerRadius="12" Padding="12,6" Width="140">
+            </NumericUpDown>
+        </StackPanel>
+    </StackPanel>
+
+    <!-- Second row: APIs -->
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="20">
+        <StackPanel Spacing="4">
+            <TextBlock Foreground="{DynamicResource TextBrush}"
+                       FontWeight="Bold"
+                       HorizontalAlignment="Center">Signaling Server</TextBlock>
+            <TextBox Text="{Binding SignalingServerText}" 
+                     Foreground="{DynamicResource PrimaryBrush}" 
+                     Background="{DynamicResource TextBrush}" 
+                     BorderBrush="{DynamicResource AccentBrush}" 
+                     CornerRadius="12" Padding="8,4" 
+                     Effect="{DynamicResource DropShadow}"
+                     FontWeight="Bold"
+                     TextAlignment="Center"/>
+        </StackPanel>
+
+        <StackPanel Spacing="4">
+            <TextBlock Foreground="{DynamicResource TextBrush}"
+                       FontWeight="Bold" HorizontalAlignment="Center">IPv6 echo API:</TextBlock>
+            <TextBox Text="{Binding ApiV6Text}" 
+                     Foreground="{DynamicResource PrimaryBrush}" 
+                     Background="{DynamicResource TextBrush}" 
+                     BorderBrush="{DynamicResource AccentBrush}" 
+                     CornerRadius="12" Padding="8,4" 
+                     Effect="{DynamicResource DropShadow}"
+                     FontWeight="Bold"
+                     TextAlignment="Center"/>
+        </StackPanel>
+
+        <StackPanel Spacing="4">
+            <TextBlock Foreground="{DynamicResource TextBrush}"
+                       FontWeight="Bold" TextAlignment="Center">IPv4 echo API:</TextBlock>
+            <TextBox Text="{Binding ApiV4Text}" 
+                     Foreground="{DynamicResource PrimaryBrush}" 
+                     Background="{DynamicResource TextBrush}" 
+                     BorderBrush="{DynamicResource AccentBrush}" 
+                     CornerRadius="12" Padding="8,4" 
+                     Effect="{DynamicResource DropShadow}"
+                     TextAlignment="Center"
+                     FontWeight="Bold"/>
+        </StackPanel>
+    </StackPanel>
+
+    <!-- Info text -->
+    <TextBlock FontWeight="SemiBold" FontSize="14" Effect="{DynamicResource TextShadow}"
+               TextAlignment="Center" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap" MaxWidth="880">
+        If you are using your own APIs, make sure that they are working and are accessible.
+        Also make sure that you and your peer are using the same signaling server.
+    </TextBlock>
+
+    <TextBlock Text="{Binding SettingsText}" TextWrapping="Wrap" Foreground="{DynamicResource TextBrush}" MaxWidth="880"/>
+
+    <!-- Action Buttons -->
+    <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center">
+        <Button Content="Exit and save" Command="{Binding SaveSettingsCommand}" 
+                Foreground="{DynamicResource TextBrush}" 
+                Background="{DynamicResource PrimaryBrush}" 
+                BorderBrush="{DynamicResource AccentBrush}" 
+                Padding="12,6" CornerRadius="12" FontWeight="Bold"
+                Effect="{DynamicResource DropShadow}"/>
+        <Button Content="Exit without saving" Command="{Binding CloseSettingsCommand}" 
+                Foreground="{DynamicResource TextBrush}" 
+                Background="{DynamicResource PrimaryBrush}" 
+                BorderBrush="{DynamicResource AccentBrush}" 
+                Padding="12,6" CornerRadius="12" FontWeight="Bold"
+                Effect="{DynamicResource DropShadow}"/>
+    </StackPanel>
+</StackPanel>
+
+
+                </Grid>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

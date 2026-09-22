@@ -1,0 +1,21 @@
+[Unit]
+Description=Quiczilla encrypted file transfer daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=quiczilla
+Group=quiczilla
+WorkingDirectory=/var/lib/quiczilla
+ExecStart=/usr/local/bin/quic daemon --allow-thumbprints /etc/quiczilla/authorized_thumbprints --save-dir /srv/quiczilla --identity-dir /var/lib/quiczilla/identity --on-conflict refuse --port 55441
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/quiczilla /var/lib/quiczilla /etc/quiczilla
+
+[Install]
+WantedBy=multi-user.target

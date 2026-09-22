@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install .NET runtime (Windows MsQuic)
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install MsQuic (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          if ! apt-cache show libmsquic >/dev/null 2>&1; then
+            wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
+            sudo dpkg -i packages-microsoft-prod.deb
+            sudo apt-get update
+          fi
+          sudo apt-get install -y libmsquic
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Workspace Check
+        run: cargo check --workspace --all-targets
+
+      - name: Workspace Unit & Integration Tests
+        run: cargo test --workspace --all-targets
+
+      - name: Clippy Linter
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build daemon test binaries
+        run: cargo build -p quiczilla-cli -p quiczilla-worker
+
+      - name: Persistent daemon E2E (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/test_daemon.sh
+
+      - name: Persistent daemon E2E (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test_daemon.ps1

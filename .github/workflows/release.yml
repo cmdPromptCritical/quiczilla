@@ -1,0 +1,146 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Set this repository variable after the public STUN DNS name is ready.
+  # An unset or empty value leaves STUN opt-in rather than hard-coding an IP.
+  QUICZILLA_DEFAULT_STUN_SERVER: ${{ vars.QUICZILLA_DEFAULT_STUN_SERVER }}
+
+jobs:
+  workers:
+    name: Build worker (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-22.04
+            command: cargo build --release -p quiczilla-worker
+            source: target/release/quiczilla-worker
+            artifact: worker-linux-x86_64
+          - name: windows-x86_64
+            runner: windows-2022
+            command: cargo build --release -p quiczilla-worker
+            source: target/release/quiczilla-worker.exe
+            artifact: worker-windows-x86_64.exe
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: ${{ matrix.command }}
+      - name: Stage embedded worker
+        shell: bash
+        run: cp '${{ matrix.source }}' '${{ matrix.artifact }}'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  linux-runtime:
+    name: Build Linux MsQuic runtime
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install official MsQuic package
+        shell: bash
+        run: |
+          wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
+          sudo dpkg -i packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo apt-get install -y libmsquic
+          runtime=$(dpkg -L libmsquic | grep -E '/libmsquic\.so(\.[0-9]+)*$' | head -n 1)
+          test -f "$runtime"
+          cp "$runtime" msquic-linux-x86_64.so
+      - uses: actions/upload-artifact@v6
+        with:
+          name: msquic-linux-x86_64.so
+          path: msquic-linux-x86_64.so
+          if-no-files-found: error
+
+  packages:
+    name: Package (${{ matrix.name }})
+    needs: [workers, linux-runtime]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-22.04
+            archive: quiczilla-linux-x86_64.tar.gz
+          - name: windows-x86_64
+            runner: windows-2022
+            archive: quiczilla-windows-x86_64.zip
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
+        with:
+          path: cli/embedded
+          merge-multiple: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+      - uses: Swatinem/rust-cache@v2
+      - name: Stage MsQuic (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $runtime = Get-ChildItem "$env:DOTNET_ROOT\shared\Microsoft.NETCore.App" -Recurse -Filter msquic.dll |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $runtime) { throw "msquic.dll was not installed by the .NET runtime" }
+          Copy-Item $runtime.FullName cli/embedded/msquic-windows-x86_64.dll
+      - name: Build CLI
+        run: cargo build --release -p quiczilla-cli
+      - name: Create Linux archive
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir dist
+          cp target/release/quiczilla-cli dist/quiczilla
+          cp cli/embedded/worker-linux-x86_64 dist/quiczilla-worker
+          cp cli/embedded/msquic-linux-x86_64.so dist/libmsquic.so
+          chmod +x dist/quiczilla dist/quiczilla-worker
+          tar -C dist -czf '${{ matrix.archive }}' quiczilla quiczilla-worker libmsquic.so
+      - name: Create Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/quiczilla-cli.exe dist/quiczilla.exe
+          Copy-Item cli/embedded/worker-windows-x86_64.exe dist/quiczilla-worker.exe
+          Copy-Item cli/embedded/msquic-windows-x86_64.dll dist/msquic.dll
+          Compress-Archive -Path dist/quiczilla.exe, dist/quiczilla-worker.exe, dist/msquic.dll -DestinationPath '${{ matrix.archive }}'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          pattern: quiczilla-*
+          merge-multiple: true
+      - name: Generate checksums and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum quiczilla-windows-x86_64.zip quiczilla-linux-x86_64.tar.gz > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes \
+            quiczilla-windows-x86_64.zip quiczilla-linux-x86_64.tar.gz SHA256SUMS
