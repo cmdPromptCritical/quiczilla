@@ -1,5 +1,6 @@
 pub mod cert;
 pub mod client;
+pub mod directory;
 pub mod msquic;
 pub mod peer;
 pub mod peer_generic;

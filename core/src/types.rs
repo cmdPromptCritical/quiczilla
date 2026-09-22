@@ -27,6 +27,7 @@ pub const ALPN_PROTOCOL: &[u8] = b"fileShare";
 pub const CONTROL_STREAM_HEADER: u8 = 0x01;
 pub const FILE_STREAM_HEADER: u8 = 0x02;
 pub const PIPE_STREAM_HEADER: u8 = 0x03;
+pub const DIRECTORY_STREAM_HEADER: u8 = 0x04;
 pub const STREAM_ERROR_CODE: u32 = 0x0A;
 pub const CLOSE_ERROR_CODE: u32 = 0x0B;
 pub const IDLE_TIMEOUT_SECS: u64 = 30;

@@ -2,12 +2,15 @@ use anyhow::{Context, Result};
 use quiczilla_core::cert::{
     build_persistent_quic_config, build_quic_config, default_identity_dir, normalize_thumbprint,
 };
+use quiczilla_core::directory::{receive_directory, write_directory_ack};
 use quiczilla_core::msquic::engine::MsQuicConnection;
 use quiczilla_core::msquic::engine::MsQuicEngine;
 use quiczilla_core::msquic::engine::MsQuicListener;
 use quiczilla_core::peer::{PeerCommand, PeerEvent, run_peer};
 use quiczilla_core::pipe::run_pipe;
-use quiczilla_core::types::{CONTROL_STREAM_HEADER, FILE_STREAM_HEADER, PIPE_STREAM_HEADER};
+use quiczilla_core::types::{
+    CONTROL_STREAM_HEADER, DIRECTORY_STREAM_HEADER, FILE_STREAM_HEADER, PIPE_STREAM_HEADER,
+};
 use std::env;
 use std::path::Path;
 use std::process::Stdio;
@@ -30,6 +33,7 @@ async fn main() -> Result<()> {
     let mut expected_thumbprint = String::new();
     let mut save_dir = std::env::current_dir()?.to_string_lossy().to_string();
     let mut is_pipe_mode = false;
+    let mut is_directory_mode = false;
     let mut exec_command: Option<String> = None;
     let mut verify = false;
     let mut is_daemon = false;
@@ -61,6 +65,9 @@ async fn main() -> Result<()> {
             }
             "--pipe" => {
                 is_pipe_mode = true;
+            }
+            "--directory" => {
+                is_directory_mode = true;
             }
             "--exec" => {
                 if i + 1 < args.len() {
@@ -260,6 +267,7 @@ async fn main() -> Result<()> {
                         connection,
                         (*save_dir).clone(),
                         false,
+                        false,
                         None,
                         verify,
                         resume,
@@ -282,6 +290,7 @@ async fn main() -> Result<()> {
             connection,
             save_dir,
             is_pipe_mode,
+            is_directory_mode,
             exec_command,
             verify,
             resume,
@@ -301,6 +310,7 @@ async fn handle_incoming_connection(
     mut connection: MsQuicConnection,
     save_dir: String,
     is_pipe_mode: bool,
+    is_directory_mode: bool,
     exec_command: Option<String>,
     verify: bool,
     resume: bool,
@@ -321,13 +331,32 @@ async fn handle_incoming_connection(
         stream.send.shared.lock().unwrap().stream_handle
     );
     let mut recv = stream.recv;
-    let send = stream.send;
+    let mut send = stream.send;
     let mut header = [0u8; 1];
     match recv.read_exact(&mut header).await {
         Ok(_) => eprintln!("[Worker] Stream 1 header: 0x{:02x}", header[0]),
         Err(e) => {
             eprintln!("[Worker] Failed to read stream 1 header: {:?}", e);
             return Ok(());
+        }
+    }
+
+    if header[0] == DIRECTORY_STREAM_HEADER || is_directory_mode {
+        if header[0] != DIRECTORY_STREAM_HEADER {
+            anyhow::bail!("directory worker received a non-directory stream header");
+        }
+        eprintln!("[Worker] Entering native streamed directory mode");
+        let result = receive_directory(&mut recv, Path::new(&save_dir)).await;
+        write_directory_ack(&mut send, &result).await?;
+        match result {
+            Ok(stats) => {
+                eprintln!(
+                    "[Worker Directory] Completed {} files, {} directories, {} bytes in {} logical packs",
+                    stats.files, stats.directories, stats.bytes, stats.packs
+                );
+                return Ok(());
+            }
+            Err(error) => return Err(error),
         }
     }
 

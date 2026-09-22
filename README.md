@@ -222,11 +222,12 @@ Quiczilla takes a **hybrid zero-install approach**:
 
 > **Note:** The CLI is available interchangeably as both `quic` and `quiczilla`. Both commands are registered by the installers.
 
-### 1. Direct File Transfer
-Transfer local files to a remote destination with automatic SSH bootstrap, userspace binary caching, and direct QUIC streaming:
+### 1. Direct File and Directory Transfer
+Transfer local files or a complete directory tree to a remote destination with
+automatic SSH bootstrap, userspace binary caching, and direct QUIC streaming:
 
 ```bash
-quic <local_file> <user@host:destination_folder/> [-c|--resume] [--checksum] [-i|--identity <key>]
+quic <local_file-or-directory> <user@host:destination_folder/> [-c|--resume] [--checksum] [-i|--identity <key>]
     [-q|--quiet|--no-progress|--verbose|--json] [-p|--port <ssh-port>]
     [--transport auto|direct|stun|manual|ssh] [--stun-server <host:port>]
     [--quic-host <host-or-ip>] [--quic-port <port>]
@@ -234,6 +235,9 @@ quic <local_file> <user@host:destination_folder/> [-c|--resume] [--checksum] [-i
 # Examples:
 quic dataset.tar.gz ops@receiver.example.net:/srv/incoming/
 quic -c -i ~/.ssh/id_ed25519 large_disk.iso admin@192.0.2.50:C:\Transfers\
+
+# Directory trees are detected automatically; `send` is an optional explicit spelling.
+quic send ./project ops@receiver.example.net:/srv/incoming/ --checksum
 ```
 
 The default terminal display updates every 500 ms with the file name, a progress bar, transferred bytes, rate, and ETA. Progress is written to standard error so standard output remains available to callers.
@@ -246,6 +250,35 @@ planned as a follow-up to the transfer lifecycle refactor.
 
 * **Hot Pause / Resume:** Press <kbd>Space</kbd> or <kbd>p</kbd> at any time during an active transfer to instantly pause transmission without closing the connection. Press <kbd>Space</kbd> or <kbd>p</kbd> again to resume. Press <kbd>q</kbd> or <kbd>Ctrl+C</kbd> to cancel.
 * **Cold Resumption (`-c`, `--resume`):** Interrupted transfers can be resumed at any time by specifying `-c` or `--resume`. For files ≥ 20 MiB, transfers stage in `<file>.quic-part` aligned to 2 MiB boundaries with a rapid 64 KiB prefix fingerprint check. If the local file changes, Quiczilla automatically falls back to restarting from byte 0.
+
+#### Native directory mode
+
+Directories are streamed through one mTLS-authenticated QUIC connection. The
+sender traverses incrementally and groups small files into logical packs; it
+does **not** construct a temporary tar/zip archive, pre-scan the entire tree,
+or retain the tree in memory. Each file is read and written using the bounded
+2 MiB transfer buffer. Empty directories are preserved; source symlinks are
+skipped, and destination symlinks/path traversal are refused.
+
+Choose a storage profile only when the automatic balanced profile is not right
+for the endpoint pair:
+
+```bash
+# Sequential 16 MiB logical packs: safest for either endpoint on an HDD.
+quic ./photos ops@receiver.example.net:/srv/incoming/ --storage-profile hdd
+
+# Balanced 32 MiB packs (default).
+quic ./project ops@receiver.example.net:/srv/incoming/
+
+# 64 MiB logical packs for known NVMe/SSD endpoints on a fast path.
+quic ./build-output ops@receiver.example.net:/srv/incoming/ --storage-profile nvme
+```
+
+A pack target controls accounting and file grouping, not a RAM allocation: no
+pack is buffered or staged as a file. The first directory release uses one
+in-flight pack to keep HDD access sequential; `--resume` and SSH fallback are
+currently file-mode features and are rejected for directory jobs rather than
+silently changing semantics.
 
 ### Connection selection
 

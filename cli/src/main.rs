@@ -7,10 +7,13 @@ use quiczilla_core::cert::{
     build_persistent_quic_config, build_quic_config, default_identity_dir, normalize_thumbprint,
 };
 use quiczilla_core::client::{connect_client, start_client, start_connected_client};
+use quiczilla_core::directory::{
+    DirectoryTransferStats, StorageProfile, read_directory_ack, send_directory,
+};
 use quiczilla_core::msquic::engine::{MsQuicConfiguration, MsQuicConnection, MsQuicEngine};
 use quiczilla_core::peer::{PeerCommand, PeerEvent};
 use quiczilla_core::pipe::run_pipe;
-use quiczilla_core::types::{FileTransferStatus, PIPE_STREAM_HEADER};
+use quiczilla_core::types::{DIRECTORY_STREAM_HEADER, FileTransferStatus, PIPE_STREAM_HEADER};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fmt;
@@ -148,6 +151,8 @@ struct TransferCli {
     quic_host: Option<String>,
     #[arg(long = "quic-port", value_name = "UDP_PORT")]
     quic_port: Option<u16>,
+    #[arg(long = "storage-profile", value_parser = ["auto", "hdd", "nvme"])]
+    storage_profile: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -256,6 +261,11 @@ fn strict_validate_args(args: &[String]) -> Result<()> {
             let mut argv = vec!["quic pipe".to_string()];
             argv.extend_from_slice(&args[2..]);
             PipeCli::try_parse_from(argv).map(|_| ())
+        }
+        "send" => {
+            let mut argv = vec!["quic".to_string()];
+            argv.extend_from_slice(&args[2..]);
+            TransferCli::try_parse_from(argv).map(|_| ())
         }
         "daemon" => {
             let mut argv = vec!["quic daemon".to_string()];
@@ -625,17 +635,23 @@ async fn run() -> CliResult<()> {
         return run_direct_cli(&args[2..], output).await;
     }
 
-    // Default: file transfer (quiczilla <local_file> <user@host:path>)
-    run_file_transfer_cli(&args[1..], output).await
+    // `send` is an optional spelling for the default transfer command. A
+    // directory source is detected automatically by the same code path.
+    if args[1] == "send" {
+        run_file_transfer_cli(&args[2..], output).await
+    } else {
+        run_file_transfer_cli(&args[1..], output).await
+    }
 }
 
 fn print_usage() {
     println!("Quiczilla - High-Throughput Encrypted P2P Transfer (QUIC + mTLS)\n");
     println!("Usage:");
     println!(
-        "  quic <local_file> <user@host:path> [-c|--resume] [--checksum] [-i|--identity <key>]"
+        "  quic <local_file-or-directory> <user@host:path> [-c|--resume] [--checksum] [-i|--identity <key>]"
     );
     println!("       [-q|--quiet|--no-progress|--verbose] [-p|--port <ssh-port>]");
+    println!("       [--storage-profile auto|hdd|nvme] (directories only)");
     println!("       [--transport auto|direct|stun|manual|ssh] [--stun-server <host:port>]");
     println!("       [--quic-host <host-or-ip>] [--quic-port <port>]\n");
     println!("    Transfer a file with SSH bootstrap, remote userspace caching, and QUIC speed.\n");
@@ -727,6 +743,14 @@ async fn run_file_transfer_cli(args: &[String], output: OutputOptions) -> CliRes
     }
     let file_metadata = std::fs::metadata(local_path)
         .with_context(|| format!("Failed to read metadata for {}", local_file_str))?;
+    if file_metadata.is_dir() {
+        return run_directory_transfer_cli(args, output).await;
+    }
+    if !file_metadata.is_file() {
+        return Err(
+            anyhow::anyhow!("local path is not a regular file: {}", local_path.display()).into(),
+        );
+    }
     let file_size_bytes = file_metadata.len();
     let file_name = local_path
         .file_name()
@@ -1085,6 +1109,197 @@ async fn run_file_transfer_cli(args: &[String], output: OutputOptions) -> CliRes
     } else {
         Err(CliFailure::new(1, "transfer ended before completion"))
     }
+}
+
+fn directory_storage_profile(args: &[String]) -> Result<StorageProfile> {
+    let value = args
+        .windows(2)
+        .find(|pair| pair[0] == "--storage-profile")
+        .map(|pair| pair[1].as_str())
+        .unwrap_or("auto");
+    match value {
+        "auto" => Ok(StorageProfile::Auto),
+        "hdd" => Ok(StorageProfile::Hdd),
+        "nvme" => Ok(StorageProfile::Nvme),
+        _ => anyhow::bail!("--storage-profile must be auto, hdd, or nvme"),
+    }
+}
+
+/// Transfer a directory through one mTLS-authenticated QUIC stream. The
+/// protocol itself creates bounded logical packs; it never creates a temporary
+/// archive or retains the whole source tree in memory.
+async fn run_directory_transfer_cli(args: &[String], output: OutputOptions) -> CliResult<()> {
+    if args.len() < 2 {
+        return Err(CliFailure::new(
+            2,
+            "directory transfer requires source and destination",
+        ));
+    }
+    if output.transport == TransportPreference::Ssh {
+        return Err(anyhow::anyhow!(
+            "native directory transfer requires QUIC; SSH directory fallback is not implemented yet"
+        )
+        .into());
+    }
+    if output.resume {
+        return Err(anyhow::anyhow!(
+            "directory resume is not implemented yet; retry the directory transfer without --resume"
+        )
+        .into());
+    }
+    let source = Path::new(&args[0]);
+    if !source.is_dir() {
+        return Err(anyhow::anyhow!("local path is not a directory: {}", source.display()).into());
+    }
+    let (ssh_target, remote_path) = args[1]
+        .split_once(':')
+        .context("invalid remote target; expected user@host:path")?;
+    let profile = directory_storage_profile(args)?;
+    let checksum = args
+        .iter()
+        .any(|arg| arg == "--checksum" || arg == "--verify");
+    let mut renderer = ProgressRenderer::new(output.quiet || output.json, output.no_progress);
+    renderer.status(&format!(
+        "Connecting to {ssh_target} for directory transfer…"
+    ));
+
+    let engine = MsQuicEngine::new()?;
+    let (local_thumbprint, config) = build_quic_config(&engine, false)?;
+    let stun_server = configured_stun_server(&output)?;
+    let (local_udp_port, local_public_candidate, local_stun_bind_addr) = match stun_server {
+        Some(server) => match quiczilla_core::stun::discover(server, 0) {
+            Ok(candidate) => {
+                let bind_addr = candidate
+                    .local_addr
+                    .map(|ip| std::net::SocketAddr::new(ip, candidate.local_port));
+                (candidate.local_port, Some(candidate.public_addr), bind_addr)
+            }
+            Err(_) if output.transport == TransportPreference::Auto => {
+                renderer.status("STUN discovery unavailable; continuing with direct QUIC…");
+                let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+                let port = socket.local_addr()?.port();
+                drop(socket);
+                (port, None, None)
+            }
+            Err(error) => {
+                return Err(error
+                    .context("STUN transport requested but discovery failed")
+                    .into());
+            }
+        },
+        None if output.transport == TransportPreference::Stun => {
+            return Err(anyhow::anyhow!(
+                "--transport stun requires --stun-server, QUICZILLA_STUN_SERVER, or a compiled default"
+            )
+            .into());
+        }
+        None => {
+            let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+            let port = socket.local_addr()?.port();
+            drop(socket);
+            (port, None, None)
+        }
+    };
+
+    let mut worker_args = vec![
+        "--directory".to_string(),
+        "--peer-thumbprint".to_string(),
+        local_thumbprint.clone(),
+        "--save-dir".to_string(),
+        remote_path.to_string(),
+        "--punch-port".to_string(),
+        local_udp_port.to_string(),
+    ];
+    if let Some(candidate) = local_public_candidate {
+        worker_args.push("--punch-ip".to_string());
+        worker_args.push(candidate.ip().to_string());
+        worker_args.push("--punch-port".to_string());
+        worker_args.push(candidate.port().to_string());
+    }
+    if let Some(server) = stun_server {
+        worker_args.push("--stun-server".to_string());
+        worker_args.push(server.to_string());
+    }
+    if let Some(port) = output.quic_port {
+        worker_args.push("--port".to_string());
+        worker_args.push(port.to_string());
+    } else if output.transport == TransportPreference::Manual {
+        return Err(anyhow::anyhow!("--transport manual requires --quic-port <port>").into());
+    }
+
+    let mut bootstrap = bootstrap_remote_worker(
+        ssh_target,
+        &worker_args,
+        &local_thumbprint,
+        output.verbose,
+        output.ssh_port,
+        output.ssh_identity.as_deref(),
+    )?;
+    let direct_host = output.quic_host.as_deref().unwrap_or(&bootstrap.host);
+    let direct_addr = resolve_quic_address(direct_host, bootstrap.udp_port)?;
+    renderer.status("Establishing encrypted directory transfer…");
+    let (connection, selected_transport) = connect_quic_candidate(
+        &output,
+        &engine,
+        &config,
+        &bootstrap.remote_thumbprint,
+        direct_addr,
+        bootstrap.public_udp_addr,
+        local_stun_bind_addr,
+    )
+    .await?;
+    let stream = connection.open_stream().await?;
+    let mut send = stream.send;
+    let mut recv = stream.recv;
+    send.write_all(&[DIRECTORY_STREAM_HEADER]).await?;
+    renderer.status(&format!(
+        "Streaming directory with {} MiB logical packs ({selected_transport})…",
+        profile.pack_target_bytes() / 1024 / 1024
+    ));
+    let transfer_start = Instant::now();
+    let sent = send_directory(&mut send, source, profile, checksum).await?;
+    send.shutdown().await?;
+    let acknowledged = read_directory_ack(&mut recv).await?;
+    let elapsed = transfer_start.elapsed().as_secs_f64().max(0.001);
+    let mib_per_second = sent.bytes as f64 / 1_048_576.0 / elapsed;
+    let stats = DirectoryTransferStats {
+        files: sent.files,
+        directories: sent.directories,
+        bytes: sent.bytes,
+        packs: sent.packs,
+    };
+    if output.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "completed",
+                "kind": "directory",
+                "transport": selected_transport,
+                "files": stats.files,
+                "directories": stats.directories,
+                "bytes": stats.bytes,
+                "packs": stats.packs,
+                "duration_seconds": elapsed,
+                "mib_per_second": mib_per_second,
+                "receiver_files": acknowledged.files,
+                "receiver_bytes": acknowledged.bytes,
+            })
+        );
+    } else {
+        renderer.status(&format!(
+            "Directory complete: {} files, {} directories, {:.2} MiB in {:.2}s ({:.2} MiB/s, {} packs)",
+            stats.files,
+            stats.directories,
+            stats.bytes as f64 / 1_048_576.0,
+            elapsed,
+            mib_per_second,
+            stats.packs
+        ));
+        renderer.completed("Directory", stats.bytes, transfer_start.elapsed(), checksum);
+    }
+    let _ = bootstrap.child.kill();
+    let _ = bootstrap.child.wait();
+    Ok(())
 }
 
 async fn run_pipe_cli(args: &[String], output: OutputOptions) -> Result<()> {
@@ -1864,6 +2079,16 @@ fn remote_worker_checksum(
 }
 
 fn sibling_worker_bytes(platform: RemotePlatform) -> Option<Vec<u8>> {
+    // A source build only has a sibling worker for its own target. Never
+    // mistake (for example) a Windows `.exe` beside this CLI for a Linux
+    // worker simply because both names are known to the bootstrap code.
+    let matches_host = match platform {
+        RemotePlatform::LinuxX86_64 => cfg!(target_os = "linux"),
+        RemotePlatform::WindowsX86_64 => cfg!(target_os = "windows"),
+    };
+    if !matches_host {
+        return None;
+    }
     let file_name = match platform {
         RemotePlatform::LinuxX86_64 => "quiczilla-worker",
         RemotePlatform::WindowsX86_64 => "quiczilla-worker.exe",
@@ -2217,6 +2442,24 @@ mod tests {
         ];
         assert!(strict_validate_args(&args).is_ok());
         assert!(OutputOptions::from_args(&args[1..]).unwrap().json);
+    }
+
+    #[test]
+    fn directory_send_accepts_storage_profile() {
+        let args = vec![
+            "quic".to_string(),
+            "send".to_string(),
+            "project".to_string(),
+            "ops@receiver.example.net:/srv/incoming".to_string(),
+            "--storage-profile".to_string(),
+            "hdd".to_string(),
+            "--checksum".to_string(),
+        ];
+        assert!(strict_validate_args(&args).is_ok());
+        assert_eq!(
+            directory_storage_profile(&args[2..]).unwrap(),
+            StorageProfile::Hdd
+        );
     }
 
     #[test]

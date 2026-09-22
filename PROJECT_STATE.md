@@ -7,7 +7,7 @@ or machine-specific paths here. Use RFC 5737 documentation addresses and
 
 ## Current status
 
-- **Release line:** `v0.1.11`.
+- **Release line:** `v0.1.12` (pending GitHub release validation).
 - **Platforms:** x86_64 Windows and Linux release archives are assembled by
   GitHub Actions. Each archive contains the CLI, the matching worker, and its
   MsQuic runtime.
@@ -73,6 +73,13 @@ commit those values or their output.
   (27.30; 18.72; 18.09), and one 1 GiB file in normal file mode (28.06; 19.85;
   19.42). The QUIC leg used `stun-quic`; SCP and rsync used SSH/TCP on the same
   public endpoint. These are point-in-time results, not a universal claim.
+- Added native source-directory detection (`quic <directory> target` or
+  `quic send <directory> target`). It streams framed, logical 16/32/64 MiB
+  packs through one QUIC connection without a temporary archive, full-tree
+  pre-scan, or unbounded queue. `--storage-profile hdd|auto|nvme` selects the
+  pack target; all profiles currently retain one in-flight pack for bounded,
+  sequential disk I/O. The receiver rejects unsafe relative paths and existing
+  destination symlinks; source symlinks and special files are skipped.
 - Pipe mode now accepts the same SSH-port, STUN, preferred-host, and manual
   QUIC candidate options as normal file transfer. It sends an orderly QUIC FIN
   after local EOF so one-way remote commands can receive EOF and exit.
