@@ -54,6 +54,19 @@ commit those values or their output.
 
 ## Recent public handover
 
+- Added `CONTRIBUTING.md` with contributor and coding-agent safeguards plus the
+  required formatting, build, unit-test, lint, release-build, and end-to-end
+  verification expectations.
+- Extended `scripts/benchmark_transfer.ps1` with optional `qcp` support. It
+  uses a temporary SSH profile for a non-default SSH port, verifies remote
+  SHA-256 values, and clearly skips a tool unavailable on the local machine.
+  qcp requires installation on both ends and a receiver UDP port/range that is
+  directly reachable; it cannot use Quiczilla's STUN broker.
+- Recorded a public-safe Windows-to-Ubuntu STUN-assisted benchmark in the
+  README. The 512 MiB median favoured Quiczilla's end-to-end route by 35% over
+  SCP; small files remained SCP-favoured because of bootstrap overhead. rsync
+  and qcp were unavailable in that environment, so no misleading comparison is
+  claimed.
 - `v0.1.9` derives its worker bundle label from `CARGO_PKG_VERSION`, avoiding a
   manually maintained version string.
 - Same-platform source builds prefer a newly built sibling worker when it is

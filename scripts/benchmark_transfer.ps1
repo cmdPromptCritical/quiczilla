@@ -12,6 +12,7 @@ param(
     [int]$Runs = 3,
     [string]$OutputPath = "quiczilla-benchmark.json",
     [switch]$SkipRsync,
+    [switch]$SkipQcp,
     [switch]$RequireDirectQuic,
     [string]$StunServer
 )
@@ -33,6 +34,10 @@ if (-not (Get-Command scp -ErrorAction SilentlyContinue)) {
 if (-not $SkipRsync -and -not (Get-Command rsync -ErrorAction SilentlyContinue)) {
     Write-Warning "Optional 'rsync' is not installed; continuing with Quiczilla and SCP only."
     $SkipRsync = $true
+}
+if (-not $SkipQcp -and -not (Get-Command qcp -ErrorAction SilentlyContinue)) {
+    Write-Warning "Optional 'qcp' is not installed locally; continuing without it. Install qcp on both endpoints to include it."
+    $SkipQcp = $true
 }
 
 function Invoke-Native {
@@ -80,6 +85,14 @@ function New-RemoteDirectory {
     $result = Invoke-Ssh "mkdir -p -- '$Path'"
     if ($result.ExitCode -ne 0) {
         throw "Could not create remote directory '$Path': $($result.Stderr.Trim())"
+    }
+}
+
+function Test-RemoteCommand {
+    param([string]$Command, [string]$DisplayName)
+    $result = Invoke-Ssh "command -v -- '$Command'"
+    if ($result.ExitCode -ne 0) {
+        throw "$DisplayName is not available on the remote host. Install it on both endpoints or use the matching -Skip switch."
     }
 }
 
@@ -140,9 +153,37 @@ function Invoke-BenchmarkRun {
     }
 }
 
-New-RemoteDirectory $remoteBase
-$records = [Collections.Generic.List[object]]::new()
-for ($run = 1; $run -le $Runs; $run++) {
+if (-not $SkipRsync) {
+    Test-RemoteCommand "rsync" "rsync"
+}
+if (-not $SkipQcp) {
+    Test-RemoteCommand "qcp" "qcp"
+}
+
+# qcp reads OpenSSH-style configuration itself. An ephemeral, restrictive
+# profile lets its SSH bootstrap use the requested non-default port without
+# relying on or changing the user's personal SSH configuration.
+$targetMatch = [regex]::Match($SshTarget, "^(?:(?<user>[^@]+)@)?(?<host>.+)$")
+if (-not $targetMatch.Success) {
+    throw "Could not derive a qcp SSH profile from '$SshTarget'"
+}
+$qcpHostAlias = "quiczilla-qcp-benchmark-$PID"
+$qcpSshConfig = Join-Path ([IO.Path]::GetTempPath()) "$qcpHostAlias.conf"
+$qcpConfig = @(
+    "Host $qcpHostAlias",
+    "    HostName $($targetMatch.Groups['host'].Value)",
+    "    Port $SshPort",
+    "    BatchMode yes"
+)
+if ($targetMatch.Groups['user'].Success) {
+    $qcpConfig += "    User $($targetMatch.Groups['user'].Value)"
+}
+Set-Content -LiteralPath $qcpSshConfig -Value $qcpConfig -Encoding utf8
+
+try {
+    New-RemoteDirectory $remoteBase
+    $records = [Collections.Generic.List[object]]::new()
+    for ($run = 1; $run -le $Runs; $run++) {
     $quicDir = "$remoteBase/quic-$run"
     New-RemoteDirectory $quicDir
     $quicTarget = "{0}:{1}/" -f $SshTarget, $quicDir
@@ -169,9 +210,22 @@ for ($run = 1; $run -le $Runs; $run++) {
             "-a", "--checksum", "-e", "ssh -p $SshPort", $source, $rsyncTarget
         ) "$rsyncDir/$sourceName"))
     }
+
+    if (-not $SkipQcp) {
+        $qcpDir = "$remoteBase/qcp-$run"
+        New-RemoteDirectory $qcpDir
+        $qcpTarget = "{0}:{1}/" -f $qcpHostAlias, $qcpDir
+        $records.Add((Invoke-BenchmarkRun "qcp" $run @(
+            "--ssh-config", $qcpSshConfig, $source, $qcpTarget
+        ) "$qcpDir/$sourceName"))
+    }
 }
 
-$records | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $OutputPath -Encoding utf8
-Write-Host "Benchmark results written to $OutputPath"
-Write-Host "Remote artifacts retained under $($SshTarget):$remoteBase"
-$records | Format-Table tool,run,transport,wall_seconds,payload_seconds,wall_mib_per_second,sha256_verified
+    $records | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $OutputPath -Encoding utf8
+    Write-Host "Benchmark results written to $OutputPath"
+    Write-Host "Remote artifacts retained under $($SshTarget):$remoteBase"
+    $records | Format-Table tool,run,transport,wall_seconds,payload_seconds,wall_mib_per_second,sha256_verified
+}
+finally {
+    Remove-Item -LiteralPath $qcpSshConfig -Force -ErrorAction SilentlyContinue
+}

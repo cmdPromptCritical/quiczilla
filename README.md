@@ -91,12 +91,15 @@ For operating Quiczilla's optional public default STUN service, see
 [deploy/STUN.md](deploy/STUN.md). The service performs candidate discovery only;
 file data remains direct QUIC or SSH fallback.
 
-### Benchmarking against SCP
+### Benchmarking against SCP, rsync, and qcp
 
-The repeatable PowerShell harness compares release-mode Quiczilla, `scp`, and
-optionally `rsync` against the same remote Linux host. It records both wall-clock
-time and Quiczilla’s payload time, reports the selected transport, and verifies
-each destination with SHA-256:
+The repeatable PowerShell harness compares release-mode Quiczilla, `scp`,
+`rsync`, and optionally [qcp](https://github.com/crazyscot/qcp) against the
+same Linux receiver. It records wall-clock time and Quiczilla's payload time,
+reports the selected transport, and verifies every destination with SHA-256.
+`qcp` must be installed and available on both endpoints: it starts its remote
+server through SSH, but it needs a directly reachable UDP port range and does
+not use Quiczilla's STUN broker.
 
 ```powershell
 .\scripts\benchmark_transfer.ps1 `
@@ -104,16 +107,51 @@ each destination with SHA-256:
   -SshTarget ops@receiver.example.net `
   -RemoteDir /srv/quiczilla-benchmark `
   -SshPort 2222 `
-  -QuicPath .\target\release\quiczilla-cli.exe
+  -QuicPath .\target\release\quiczilla-cli.exe `
+  -StunServer stun.example.net:3478 `
+  -RequireDirectQuic
 ```
 
 The script intentionally retains uniquely named remote benchmark artifacts so
 results can be inspected; remove them after recording a result. Compare medians
 from at least three runs and do not treat SSH-fallback measurements as direct
-QUIC performance. Add `-SkipRsync` when rsync is unavailable on the client;
-the harness then compares Quiczilla and SCP only. Add `-RequireDirectQuic` to
-fail immediately if Quiczilla falls back to SSH. Add `-StunServer host:port`
-to force the Quiczilla leg through the configured STUN-assisted path.
+QUIC performance. Add `-SkipRsync` or `-SkipQcp` only when the respective tool
+is unavailable. Add `-RequireDirectQuic` to fail immediately if Quiczilla falls
+back to SSH. Add `-StunServer host:port` to force the Quiczilla leg through the
+configured STUN-assisted path.
+
+### Measured benchmark: Windows 11 to Ubuntu over public STUN
+
+The following is a reproducible point-in-time measurement of the installed
+Quiczilla `v0.1.10` release. Each value is the median of three uploads of
+random data from a Windows 11 client to an Ubuntu receiver. Quiczilla was
+required to use `stun-quic`; SCP used the receiver's public SSH/TCP endpoint.
+Every completed destination was verified with SHA-256.
+
+| Payload | Quiczilla (STUN QUIC) | SCP baseline | Relative result | rsync | qcp |
+| :--- | ---: | ---: | :--- | :--- | :--- |
+| 64 KiB | 0.04 MiB/s (1.48 s) | **0.20 MiB/s (0.31 s)** | SCP wins: connection setup dominates | Not installed on Windows client | Not installed on either endpoint |
+| 10 MiB | 5.47 MiB/s (1.83 s) | **12.06 MiB/s (0.83 s)** | SCP wins: bootstrap still dominates | Not installed on Windows client | Not installed on either endpoint |
+| 512 MiB | **26.53 MiB/s (19.30 s)** | 19.63 MiB/s (26.08 s) | Quiczilla +35% | Not installed on Windows client | Not runnable on this STUN-only route |
+
+End-to-end median throughput plot (each `█` is approximately 1 MiB/s):
+
+```text
+64 KiB   Quiczilla  0.04 | ·
+          SCP        0.20 | ·
+10 MiB   Quiczilla  5.50 | ██████
+          SCP       18.52 | ███████████████████
+512 MiB  Quiczilla 26.53 | ███████████████████████████
+          SCP       19.63 | ████████████████████
+```
+
+This is intentionally not presented as a protocol-only comparison: Quiczilla
+uses STUN only to discover candidates, then carries data directly over UDP/QUIC;
+SCP and rsync use SSH/TCP. The public path, host, payload generator, and run
+order can affect results. `qcp` also uses QUIC, but it needs its executable on
+both machines and an inbound, directly reachable UDP port/range on the receiver;
+it cannot use Quiczilla's STUN broker. Install those tools and repeat the
+harness before making a three- or four-way claim.
 
 ---
 
@@ -261,25 +299,6 @@ If that managed location cannot execute—for example, due to a `noexec`
 policy—Quiczilla warns and uses the existing installed worker instead. Future
 releases will add an explicit protocol-compatibility check to that fallback.
 
-### Benchmark Results (Live Tailscale Test)
-
-Illustrative benchmark format for a Windows client and a Linux receiver:
-
-| Mode / Payload | Bootstrap Latency | QUIC Handshake | Transfer Duration | Average Throughput | Verification |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Pipe Upload** (`quiczilla pipe`) | 0.71s (Pre-installed) | 8.23 ms | 0.01s | Stream Wire Speed | ✅ SHA-256 Verified |
-| **Pipe Download** (`quiczilla pipe`) | 0.72s (Pre-installed) | 7.26 ms | 0.01s | Stream Wire Speed | ✅ SHA-256 Verified |
-| **File Transfer (25 MB)** | 0.76s (Pre-installed) | 7.02 ms | 2.65s | **9.41 MB/s** | ✅ SHA-256 Verified |
-| **File Transfer (50 MB)** | 0.76s (Pre-installed) | 7.02 ms | 5.31s | **9.41 MB/s** | ✅ SHA-256 Verified |
-
-### Running Automated Benchmarks
-
-An automated test script is included to test transfers, log bootstrap and throughput metrics, and verify remote SHA-256 integrity:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\test_transfer.ps1 -Target "ops@receiver.example.net:/srv/quiczilla-test/" -SizeMB 25
-```
-
 ---
 
 ## Workspace Architecture
@@ -295,6 +314,9 @@ The project is structured as a modular Cargo Workspace:
 ---
 
 ## Development & Verification
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution workflow, security
+expectations, and the verification required before review.
 
 ### Prerequisites
 * **Rust:** 1.85+ (Edition 2024)
