@@ -13,6 +13,9 @@ param(
     [string]$OutputPath = "quiczilla-benchmark.json",
     [switch]$SkipRsync,
     [switch]$SkipQcp,
+    [switch]$UsePipe,
+    [string]$RsyncSshCommand,
+    [switch]$RsyncCygwinPaths,
     [switch]$RequireDirectQuic,
     [string]$StunServer
 )
@@ -39,6 +42,22 @@ if (-not $SkipQcp -and -not (Get-Command qcp -ErrorAction SilentlyContinue)) {
     Write-Warning "Optional 'qcp' is not installed locally; continuing without it. Install qcp on both endpoints to include it."
     $SkipQcp = $true
 }
+if (-not $RsyncSshCommand) {
+    $RsyncSshCommand = "ssh -p $SshPort"
+}
+
+function Get-RsyncSourcePath {
+    if (-not $RsyncCygwinPaths) {
+        return $source
+    }
+    if ($source -notmatch "^([A-Za-z]):\\(.*)$") {
+        throw "-RsyncCygwinPaths requires an absolute drive-letter source path"
+    }
+    $drive = $Matches[1].ToLowerInvariant()
+    $remainder = $Matches[2] -replace "\\", "/"
+    "/cygdrive/$drive/$remainder"
+}
+$rsyncSource = Get-RsyncSourcePath
 
 function Invoke-Native {
     param([string]$FilePath, [string[]]$Arguments)
@@ -71,6 +90,45 @@ function Invoke-Native {
         }
     }
     finally {
+        $process.Dispose()
+    }
+}
+
+function Invoke-PipeNative {
+    param([string]$FilePath, [string[]]$Arguments, [string]$InputPath)
+
+    $start = [Diagnostics.Stopwatch]::StartNew()
+    $info = [Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = $FilePath
+    $info.UseShellExecute = $false
+    $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        $info.ArgumentList.Add($argument)
+    }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $info
+    $input = $null
+    try {
+        if (-not $process.Start()) {
+            throw "Failed to start $FilePath"
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $input = [IO.File]::OpenRead($InputPath)
+        $input.CopyTo($process.StandardInput.BaseStream)
+        $process.StandardInput.Close()
+        $process.WaitForExit()
+        [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Stdout = $stdoutTask.GetAwaiter().GetResult()
+            Stderr = $stderrTask.GetAwaiter().GetResult()
+            WallSeconds = $start.Elapsed.TotalSeconds
+        }
+    }
+    finally {
+        if ($null -ne $input) { $input.Dispose() }
         $process.Dispose()
     }
 }
@@ -153,6 +211,43 @@ function Invoke-BenchmarkRun {
     }
 }
 
+function Invoke-PipeBenchmarkRun {
+    param(
+        [int]$Run,
+        [string[]]$Arguments,
+        [string]$RemotePath
+    )
+
+    $result = Invoke-PipeNative $QuicPath $Arguments $source
+    if ($result.ExitCode -ne 0) {
+        throw "quic pipe run $Run failed with exit code $($result.ExitCode): $($result.Stderr.Trim())"
+    }
+    $remoteHash = Get-RemoteHash $RemotePath
+    if ($remoteHash -ne $sourceHash) {
+        throw "quic pipe run $Run produced a SHA-256 mismatch"
+    }
+    $transportMatch = [regex]::Match($result.Stderr, "\[quiczilla pipe\] ([a-z-]+) mTLS connected")
+    if (-not $transportMatch.Success) {
+        throw "quic pipe run $Run did not report its selected transport"
+    }
+    $transport = $transportMatch.Groups[1].Value
+    if ($RequireDirectQuic -and $transport -notin @("direct-quic", "stun-quic", "manual-quic")) {
+        throw "quic pipe run $Run used '$transport' instead of direct QUIC"
+    }
+
+    [pscustomobject]@{
+        tool = "quic-pipe"
+        run = $Run
+        bytes = $sourceBytes
+        wall_seconds = [math]::Round($result.WallSeconds, 3)
+        payload_seconds = $null
+        wall_mib_per_second = [math]::Round($sourceBytes / 1MB / $result.WallSeconds, 3)
+        transport = $transport
+        sha256_verified = $true
+        remote_path = $RemotePath
+    }
+}
+
 if (-not $SkipRsync) {
     Test-RemoteCommand "rsync" "rsync"
 }
@@ -186,14 +281,26 @@ try {
     for ($run = 1; $run -le $Runs; $run++) {
     $quicDir = "$remoteBase/quic-$run"
     New-RemoteDirectory $quicDir
-    $quicTarget = "{0}:{1}/" -f $SshTarget, $quicDir
-    $quicArguments = @(
-        $source, $quicTarget, "-p", "$SshPort", "--checksum", "--json", "--no-progress"
-    )
-    if ($StunServer) {
-        $quicArguments += @("--transport", "stun", "--stun-server", $StunServer)
+    if ($UsePipe) {
+        $pipeRemotePath = "$quicDir/$sourceName"
+        $pipeCommand = "cat > '$pipeRemotePath'"
+        $pipeArguments = @(
+            "pipe", $SshTarget, $pipeCommand, "-p", "$SshPort", "--checksum", "--no-progress"
+        )
+        if ($StunServer) {
+            $pipeArguments += @("--transport", "stun", "--stun-server", $StunServer)
+        }
+        $records.Add((Invoke-PipeBenchmarkRun $run $pipeArguments $pipeRemotePath))
+    } else {
+        $quicTarget = "{0}:{1}/" -f $SshTarget, $quicDir
+        $quicArguments = @(
+            $source, $quicTarget, "-p", "$SshPort", "--checksum", "--json", "--no-progress"
+        )
+        if ($StunServer) {
+            $quicArguments += @("--transport", "stun", "--stun-server", $StunServer)
+        }
+        $records.Add((Invoke-BenchmarkRun $QuicPath $run $quicArguments "$quicDir/$sourceName"))
     }
-    $records.Add((Invoke-BenchmarkRun $QuicPath $run $quicArguments "$quicDir/$sourceName"))
 
     $scpDir = "$remoteBase/scp-$run"
     New-RemoteDirectory $scpDir
@@ -207,7 +314,7 @@ try {
         New-RemoteDirectory $rsyncDir
         $rsyncTarget = "{0}:{1}/" -f $SshTarget, $rsyncDir
         $records.Add((Invoke-BenchmarkRun "rsync" $run @(
-            "-a", "--checksum", "-e", "ssh -p $SshPort", $source, $rsyncTarget
+            "-a", "--checksum", "-e", $RsyncSshCommand, $rsyncSource, $rsyncTarget
         ) "$rsyncDir/$sourceName"))
     }
 

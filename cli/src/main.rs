@@ -166,6 +166,14 @@ struct PipeCli {
     ssh_identity: Option<String>,
     #[arg(short = 'p', long = "port", value_name = "SSH_PORT")]
     ssh_port: Option<u16>,
+    #[arg(long, value_parser = ["auto", "direct", "stun", "manual"])]
+    transport: Option<String>,
+    #[arg(long = "stun-server")]
+    stun_server: Option<String>,
+    #[arg(long = "quic-host", value_name = "HOST_OR_IP")]
+    quic_host: Option<String>,
+    #[arg(long = "quic-port", value_name = "UDP_PORT")]
+    quic_port: Option<u16>,
     #[arg(short = 'q', long = "quiet")]
     quiet: bool,
     #[arg(long = "no-progress")]
@@ -695,8 +703,10 @@ fn print_identity_usage() {
 
 fn print_pipe_usage() {
     println!(
-        "Usage: quic pipe <user@host> [\"<remote_command>\"] [--checksum] [-q|--quiet] [--no-progress] [-i|--identity <ssh-key>]"
+        "Usage: quic pipe <user@host> [\"<remote_command>\"] [--checksum] [-q|--quiet] [--no-progress] [-i|--identity <ssh-key>] [-p|--port <ssh-port>]"
     );
+    println!("       [--transport auto|direct|stun|manual] [--stun-server <host:port>]");
+    println!("       [--quic-host <host-or-ip>] [--quic-port <port>]");
     println!();
     println!("Stream stdin/stdout through an SSH-bootstrapped encrypted QUIC connection.");
 }
@@ -1078,26 +1088,17 @@ async fn run_file_transfer_cli(args: &[String], output: OutputOptions) -> CliRes
 }
 
 async fn run_pipe_cli(args: &[String], output: OutputOptions) -> Result<()> {
-    if args.is_empty() {
-        eprintln!("Usage: quiczilla pipe <user@host> [\"<remote_command>\"] [--verify]");
-        std::process::exit(1);
-    }
+    let mut argv = vec!["quic pipe".to_string()];
+    argv.extend_from_slice(args);
+    let pipe = PipeCli::try_parse_from(argv)?;
+    let ssh_target = &pipe.target;
+    let exec_cmd = pipe.remote_command;
+    let verify = pipe.checksum;
 
-    let ssh_target = &args[0];
-    let mut exec_cmd: Option<String> = None;
-    let mut verify = false;
-
-    for arg in &args[1..] {
-        if arg == "--verify" || arg == "--checksum" {
-            verify = true;
-        } else if matches!(
-            arg.as_str(),
-            "-q" | "--quiet" | "--verbose" | "--no-progress"
-        ) {
-            continue;
-        } else if exec_cmd.is_none() {
-            exec_cmd = Some(arg.clone());
-        }
+    if output.transport == TransportPreference::Ssh {
+        anyhow::bail!(
+            "quic pipe does not support SSH streaming fallback; select direct, STUN, manual, or auto QUIC"
+        );
     }
 
     let start_total = Instant::now();
@@ -1110,10 +1111,31 @@ async fn run_pipe_cli(args: &[String], output: OutputOptions) -> Result<()> {
         local_thumbprint
     );
 
-    // Pick an available local UDP port for NAT hole-punching
-    let local_bind_socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
-    let local_udp_port = local_bind_socket.local_addr()?.port();
-    drop(local_bind_socket);
+    // Use the same candidate discovery and selection model as file transfer.
+    // Pipe mode must be able to traverse the same NATs as its file counterpart.
+    let stun_server = configured_stun_server(&output)?;
+    let (local_udp_port, local_public_candidate, local_stun_bind_addr) = match stun_server {
+        Some(server) => match quiczilla_core::stun::discover(server, 0) {
+            Ok(candidate) => {
+                let bind_addr = candidate
+                    .local_addr
+                    .map(|ip| std::net::SocketAddr::new(ip, candidate.local_port));
+                (candidate.local_port, Some(candidate.public_addr), bind_addr)
+            }
+            Err(error) => return Err(error.context("STUN transport requested for pipe mode")),
+        },
+        None if output.transport == TransportPreference::Stun => {
+            anyhow::bail!(
+                "--transport stun requires --stun-server, QUICZILLA_STUN_SERVER, or a compiled default"
+            );
+        }
+        None => {
+            let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+            let port = socket.local_addr()?.port();
+            drop(socket);
+            (port, None, None)
+        }
+    };
 
     // 2. Build worker arguments for pipe mode
     let mut worker_args = vec![
@@ -1130,6 +1152,22 @@ async fn run_pipe_cli(args: &[String], output: OutputOptions) -> Result<()> {
     if verify {
         worker_args.push("--verify".to_string());
     }
+    if let Some(candidate) = local_public_candidate {
+        worker_args.push("--punch-ip".to_string());
+        worker_args.push(candidate.ip().to_string());
+        worker_args.push("--punch-port".to_string());
+        worker_args.push(candidate.port().to_string());
+    }
+    if let Some(server) = stun_server {
+        worker_args.push("--stun-server".to_string());
+        worker_args.push(server.to_string());
+    }
+    if let Some(port) = output.quic_port {
+        worker_args.push("--port".to_string());
+        worker_args.push(port.to_string());
+    } else if output.transport == TransportPreference::Manual {
+        anyhow::bail!("--transport manual requires --quic-port <port>");
+    }
 
     let mut bootstrap = bootstrap_remote_worker(
         ssh_target,
@@ -1141,29 +1179,25 @@ async fn run_pipe_cli(args: &[String], output: OutputOptions) -> Result<()> {
     )?;
 
     // 3. Connect via QUIC
-    let host_with_port = format!("{}:{}", bootstrap.host, bootstrap.udp_port);
-    let remote_addr: SocketAddr = host_with_port
-        .to_socket_addrs()
-        .with_context(|| format!("Failed to resolve hostname '{}'", bootstrap.host))?
-        .next()
-        .with_context(|| format!("No IP address resolved for '{}'", bootstrap.host))?;
-
-    eprintln!("[quiczilla pipe] Dialing QUIC tunnel to {}...", remote_addr);
+    let direct_host = output.quic_host.as_deref().unwrap_or(&bootstrap.host);
+    let direct_addr = resolve_quic_address(direct_host, bootstrap.udp_port)?;
+    eprintln!("[quiczilla pipe] Dialing QUIC tunnel to {}...", direct_addr);
     let connect_start = Instant::now();
 
-    use quiczilla_core::msquic::engine::MsQuicConnection;
-    let connection = MsQuicConnection::connect(
+    let (connection, selected_transport) = connect_quic_candidate(
+        &output,
         &engine,
         &config,
-        remote_addr,
-        None,
-        Some(bootstrap.remote_thumbprint.clone()),
+        &bootstrap.remote_thumbprint,
+        direct_addr,
+        bootstrap.public_udp_addr,
+        local_stun_bind_addr,
     )
     .await?;
     let connect_ms = connect_start.elapsed().as_secs_f64() * 1000.0;
     eprintln!(
-        "[quiczilla pipe] QUIC mTLS Connected in {:.2}ms! Streaming data...",
-        connect_ms
+        "[quiczilla pipe] {selected_transport} mTLS connected in {:.2}ms! Streaming data...",
+        connect_ms,
     );
 
     let stream = connection.open_stream().await?;
@@ -2200,6 +2234,30 @@ mod tests {
         let options = OutputOptions::from_args(&args[1..]).unwrap();
         assert_eq!(options.transport, TransportPreference::Direct);
         assert_eq!(options.quic_host.as_deref(), Some("192.0.2.44"));
+    }
+
+    #[test]
+    fn pipe_accepts_stun_and_non_default_ssh_port() {
+        let args = vec![
+            "quic".to_string(),
+            "pipe".to_string(),
+            "ops@receiver.example.net".to_string(),
+            "cat > /tmp/payload.bin".to_string(),
+            "-p".to_string(),
+            "2222".to_string(),
+            "--transport".to_string(),
+            "stun".to_string(),
+            "--stun-server".to_string(),
+            "192.0.2.44:3478".to_string(),
+        ];
+        assert!(strict_validate_args(&args).is_ok());
+        let options = OutputOptions::from_args(&args[1..]).unwrap();
+        assert_eq!(options.ssh_port, Some(2222));
+        assert_eq!(options.transport, TransportPreference::Stun);
+        assert_eq!(
+            options.stun_server.unwrap(),
+            "192.0.2.44:3478".parse().unwrap()
+        );
     }
 
     #[test]

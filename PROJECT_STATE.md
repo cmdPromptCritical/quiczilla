@@ -57,16 +57,21 @@ commit those values or their output.
 - Added `CONTRIBUTING.md` with contributor and coding-agent safeguards plus the
   required formatting, build, unit-test, lint, release-build, and end-to-end
   verification expectations.
-- Extended `scripts/benchmark_transfer.ps1` with optional `qcp` support. It
+- Moved the benchmark harness to `benchmarks/benchmark_transfer.ps1` and
+  extended it with optional `qcp` support, configurable rsync SSH invocation,
+  and `-UsePipe` for raw-stream measurements. It
   uses a temporary SSH profile for a non-default SSH port, verifies remote
   SHA-256 values, and clearly skips a tool unavailable on the local machine.
   qcp requires installation on both ends and a receiver UDP port/range that is
   directly reachable; it cannot use Quiczilla's STUN broker.
-- Recorded a public-safe Windows-to-Ubuntu STUN-assisted benchmark in the
-  README. The 512 MiB median favoured Quiczilla's end-to-end route by 35% over
-  SCP; small files remained SCP-favoured because of bootstrap overhead. rsync
-  and qcp were unavailable in that environment, so no misleading comparison is
-  claimed.
+- Pipe mode now accepts the same SSH-port, STUN, preferred-host, and manual
+  QUIC candidate options as normal file transfer. It sends an orderly QUIC FIN
+  after local EOF so one-way remote commands can receive EOF and exit.
+- Recorded a public-safe Windows-to-Ubuntu public-DDNS STUN-assisted benchmark
+  in the README. The current 512 MiB median favours Quiczilla by 23% over SCP
+  and 41% over rsync. Pipe-mode small-file figures are pending a CI-built Linux
+  worker with the current EOF-completion fix; qcp remains unavailable and cannot
+  use Quiczilla's STUN broker.
 - `v0.1.9` derives its worker bundle label from `CARGO_PKG_VERSION`, avoiding a
   manually maintained version string.
 - Same-platform source builds prefer a newly built sibling worker when it is

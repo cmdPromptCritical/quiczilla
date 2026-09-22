@@ -71,6 +71,15 @@ where
             }
         }
 
+        // A raw pipe has no outer file-transfer frame to mark its end. Send an
+        // orderly QUIC FIN when stdin/child stdout reaches EOF so the remote
+        // command receives EOF (for example, `cat > file`) and can exit.
+        // Without this, a one-way pipe may deliver all bytes yet wait until a
+        // timeout because its peer continues waiting for more input.
+        if let Err(error) = send_stream.shutdown().await {
+            tracing::error!("Error finishing QUIC pipe stream: {error}");
+        }
+
         let sent_hash = hasher.map(|h| hex::encode(h.finalize()).to_lowercase());
         (bytes_sent, sent_hash)
     });
