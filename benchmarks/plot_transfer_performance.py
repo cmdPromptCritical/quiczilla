@@ -1,10 +1,10 @@
-"""Render the public v0.1.11 transfer benchmark as a mobile-readable SVG.
+"""Render the public v0.1.11 batched transfer benchmark as mobile-readable SVG.
 
 Run from the repository root:
     python benchmarks/plot_transfer_performance.py
 
-The figure deliberately uses one horizontal-bar panel per payload. A shared
-axis would make the 64 KiB result unreadable beside the 512 MiB result.
+The figure deliberately uses one horizontal-bar panel per scenario. A shared
+axis would make the many-small-files result unreadable beside a single file.
 """
 
 from pathlib import Path
@@ -17,12 +17,12 @@ import matplotlib.pyplot as plt
 
 OUTPUT = Path(__file__).with_name("transfer-performance-v0.1.11.svg")
 
-# Median wall-clock measurements from three SHA-256-verified uploads over the
-# public STUN/SSH route. Throughput is MiB/s; time is seconds.
+# Median wall-clock measurements from three SHA-256-verified 1 GiB uploads over
+# the public STUN/SSH route. Throughput is MiB/s; time is seconds.
 SCENARIOS = (
-    ("64 KiB · pipe mode", (0.04, 0.20, 0.14), (1.49, 0.31, 0.43)),
-    ("10 MiB · pipe mode", (5.38, 11.93, 8.75), (1.86, 0.84, 1.14)),
-    ("512 MiB · file mode", (27.92, 19.31, 17.88), (18.34, 26.51, 28.64)),
+    ("16,384 × 64 KiB · tar pipe", (27.78, 2.42, 15.22), (36.86, 423.25, 67.26)),
+    ("102 × 10 MiB + 4 MiB · tar pipe", (27.30, 18.72, 18.09), (37.51, 54.71, 56.61)),
+    ("1 × 1 GiB · file mode", (28.06, 19.85, 19.42), (36.49, 51.59, 52.74)),
 )
 
 TOOLS = ("Quiczilla", "SCP", "rsync")
@@ -48,7 +48,7 @@ def main() -> None:
     figure.text(
         0.5,
         0.945,
-        "Windows 11 → Ubuntu · median of 3 SHA-256-verified uploads · higher is better",
+        "Windows 11 → Ubuntu · 1 GiB per scenario · median of 3 verified uploads · higher is better",
         ha="center",
         va="top",
         fontsize=11,
@@ -86,7 +86,7 @@ def main() -> None:
         0.5,
         0.022,
         "Quiczilla used STUN-assisted direct QUIC. SCP and rsync used SSH/TCP on the same public endpoint.\n"
-        "Small pipe transfers are bootstrap-bound; do not interpret this as a protocol-only comparison.",
+        "Tar creation is excluded; transfer plus remote extraction is timed. Every destination tree was SHA-256 verified.",
         ha="center",
         va="bottom",
         fontsize=10,

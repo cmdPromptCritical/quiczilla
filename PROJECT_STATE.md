@@ -64,6 +64,15 @@ commit those values or their output.
   SHA-256 values, and clearly skips a tool unavailable on the local machine.
   qcp requires installation on both ends and a receiver UDP port/range that is
   directly reachable; it cannot use Quiczilla's STUN broker.
+- Added `benchmarks/benchmark_batched_tree.ps1` for an explicit many-file
+  workload: it packs a directory into one uncompressed `quic pipe` tar stream,
+  recursively copies the same tree with SCP and rsync, and gates every result
+  on a deterministic per-file SHA-256 manifest. The public documentation now
+  records three exact-1-GiB, three-run medians: 16,384 64 KiB files (Quiczilla
+  27.78 MiB/s; SCP 2.42; rsync 15.22), 102 10 MiB files plus a 4 MiB tail
+  (27.30; 18.72; 18.09), and one 1 GiB file in normal file mode (28.06; 19.85;
+  19.42). The QUIC leg used `stun-quic`; SCP and rsync used SSH/TCP on the same
+  public endpoint. These are point-in-time results, not a universal claim.
 - Pipe mode now accepts the same SSH-port, STUN, preferred-host, and manual
   QUIC candidate options as normal file transfer. It sends an orderly QUIC FIN
   after local EOF so one-way remote commands can receive EOF and exit.
