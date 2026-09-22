@@ -67,11 +67,12 @@ commit those values or their output.
 - Pipe mode now accepts the same SSH-port, STUN, preferred-host, and manual
   QUIC candidate options as normal file transfer. It sends an orderly QUIC FIN
   after local EOF so one-way remote commands can receive EOF and exit.
-- Recorded a public-safe Windows-to-Ubuntu public-DDNS STUN-assisted benchmark
-  in the README. The current 512 MiB median favours Quiczilla by 23% over SCP
-  and 41% over rsync. Pipe-mode small-file figures are pending a CI-built Linux
-  worker with the current EOF-completion fix; qcp remains unavailable and cannot
-  use Quiczilla's STUN broker.
+- Published `v0.1.11` with the pipe EOF-completion and STUN-option fixes. A
+  GitHub-release Windows client refreshed the matching CI-built Linux worker;
+  its public-DDNS STUN benchmark is recorded in the README. The 512 MiB median
+  favours Quiczilla by 45% over SCP and 56% over rsync. Pipe-mode small-file
+  figures are complete and show expected bootstrap overhead. qcp remains
+  unavailable and cannot use Quiczilla's STUN broker.
 - `v0.1.9` derives its worker bundle label from `CARGO_PKG_VERSION`, avoiding a
   manually maintained version string.
 - Same-platform source builds prefer a newly built sibling worker when it is

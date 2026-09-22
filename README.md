@@ -129,23 +129,30 @@ configured STUN-assisted path.
 
 ### Measured benchmark: Windows 11 to Ubuntu over public STUN
 
-The following is a reproducible point-in-time measurement of the current source
-build. Each value is the median of three uploads of random data from a Windows
-11 client to an Ubuntu receiver. Quiczilla was required to use `stun-quic`; SCP
-and rsync used the receiver's public SSH/TCP endpoint. Every completed
-destination was verified with SHA-256.
+The following is a reproducible point-in-time measurement of the installed
+GitHub `v0.1.11` release. Each value is the median of three uploads of random
+data from a Windows 11 client to an Ubuntu receiver. Quiczilla was required to
+use `stun-quic`; SCP and rsync used the receiver's public SSH/TCP endpoint.
+Every completed destination was verified with SHA-256.
 
 | Payload | Quiczilla (STUN QUIC) | SCP baseline | Relative result | rsync | qcp |
 | :--- | ---: | ---: | :--- | :--- | :--- |
-| 64 KiB / 10 MiB pipe | Pending current Linux worker build | Pending | Do not compare: prior worker lacks pipe EOF completion | Pending | Not installed on either endpoint |
-| 512 MiB file | **27.61 MiB/s (18.55 s)** | 22.48 MiB/s (22.78 s) | Quiczilla +23% vs SCP | 19.60 MiB/s (26.12 s) | Not runnable on this STUN-only route |
+| 64 KiB pipe | 0.04 MiB/s (1.49 s) | **0.20 MiB/s (0.31 s)** | SCP wins: bootstrap dominates | 0.14 MiB/s (0.43 s) | Not installed on either endpoint |
+| 10 MiB pipe | 5.38 MiB/s (1.86 s) | **11.93 MiB/s (0.84 s)** | SCP wins: bootstrap still dominates | 8.75 MiB/s (1.14 s) | Not installed on either endpoint |
+| 512 MiB file | **27.92 MiB/s (18.34 s)** | 19.31 MiB/s (26.51 s) | Quiczilla +45% vs SCP | 17.88 MiB/s (28.64 s) | Not runnable on this STUN-only route |
 
 End-to-end median throughput plot (each `█` is approximately 1 MiB/s):
 
 ```text
-512 MiB  Quiczilla 27.61 | ████████████████████████████
-          SCP       22.48 | ███████████████████████
-          rsync     19.60 | ████████████████████
+64 KiB   pipe       0.04 | ·
+          SCP        0.20 | ·
+          rsync      0.14 | ·
+10 MiB   pipe        5.38 | █████
+          SCP        11.93 | ████████████
+          rsync       8.75 | █████████
+512 MiB  Quiczilla 27.92 | ████████████████████████████
+          SCP       19.31 | ███████████████████
+          rsync     17.88 | ██████████████████
 ```
 
 This is intentionally not presented as a protocol-only comparison: Quiczilla
@@ -156,10 +163,9 @@ both machines and an inbound, directly reachable UDP port/range on the receiver;
 it cannot use Quiczilla's STUN broker. Install those tools and repeat the
 harness before making a three- or four-way claim.
 
-The pipe-mode rows are deliberately pending. Pipe now sends a clean QUIC stream
-FIN after stdin EOF and supports the same STUN options as file transfer, but a
-Windows-only source build cannot rebuild the Linux remote worker. Run those
-rows after installing a CI-built Linux worker matching this source revision.
+Pipe mode now sends a clean QUIC stream FIN after stdin EOF and supports the
+same STUN options as file transfer. The pipe rows above were run after the
+installed v0.1.11 client refreshed the matching CI-built Linux worker.
 
 ---
 
