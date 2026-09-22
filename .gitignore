@@ -17,6 +17,7 @@ src-tauri/gen/
 # IDE / OS
 .vscode/
 .idea/
+__pycache__/
 *.swp
 *.swo
 .DS_Store
