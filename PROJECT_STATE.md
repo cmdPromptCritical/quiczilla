@@ -7,7 +7,7 @@ or machine-specific paths here. Use RFC 5737 documentation addresses and
 
 ## Current status
 
-- **Release line:** `v0.1.10`.
+- **Release line:** `v0.1.11`.
 - **Platforms:** x86_64 Windows and Linux release archives are assembled by
   GitHub Actions. Each archive contains the CLI, the matching worker, and its
   MsQuic runtime.
