@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "quiczilla-cli"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "quiczilla-core"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -570,7 +570,7 @@ dependencies = [
 
 [[package]]
 name = "quiczilla-worker"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "hex",

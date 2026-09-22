@@ -7,7 +7,7 @@ or machine-specific paths here. Use RFC 5737 documentation addresses and
 
 ## Current status
 
-- **Release line:** `v0.1.9`.
+- **Release line:** `v0.1.10`.
 - **Platforms:** x86_64 Windows and Linux release archives are assembled by
   GitHub Actions. Each archive contains the CLI, the matching worker, and its
   MsQuic runtime.
@@ -61,3 +61,6 @@ commit those values or their output.
   platforms.
 - Managed worker bundles use a SHA-256-addressed cache directory, so refreshes
   do not overwrite a binary still used by another transfer.
+- One-shot transfers flush their final output and take a process-terminal
+  success path after the peer confirms completion, avoiding a native MsQuic
+  teardown hang after a successful transfer.

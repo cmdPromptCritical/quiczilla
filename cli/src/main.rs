@@ -1049,7 +1049,14 @@ async fn run_file_transfer_cli(args: &[String], output: OutputOptions) -> CliRes
     let _ = bootstrap.child.kill();
 
     if transfer_completed {
-        Ok(())
+        // The transfer result has already been received and rendered. MsQuic
+        // owns native callback threads whose teardown can block indefinitely
+        // after a one-shot worker has completed, leaving an otherwise
+        // successful CLI invocation at 100%. Flush receipts before taking the
+        // process-terminal path used by the direct daemon client as well.
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        std::process::exit(0);
     } else if fallback_allowed {
         renderer.status("UDP transport failed or timed out; falling back to SSH transfer…");
         run_ssh_fallback(
