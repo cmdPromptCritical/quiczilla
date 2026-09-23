@@ -132,8 +132,9 @@ It puts the directory into one uncompressed tar stream for `quic pipe`, while
 SCP and rsync recursively copy the identical tree. Archive creation is outside
 the timed interval; transfer and remote extraction are timed, and a deterministic
 per-file SHA-256 manifest check gates every result. This makes the file-count
-cost visible
-without pretending that Quiczilla has a native multi-file batch command yet.
+cost visible. For the native streamed directory protocol, use
+`quic <directory> target` (or `quic send <directory> target`); that mode is
+bounded and does not create a temporary archive.
 
 ```powershell
 .\benchmarks\benchmark_batched_tree.ps1 `
@@ -184,6 +185,24 @@ repeat the harness before making a three- or four-way claim.
 Pipe mode now sends a clean QUIC stream FIN after stdin EOF and supports the
 same STUN options as file transfer. The pipe rows above were run after the
 installed v0.1.11 client refreshed the matching CI-built Linux worker.
+
+### v0.1.12 single-file rerun
+
+After publishing `v0.1.12`, the same 1 GiB single-file workload was repeated
+from the GitHub Windows archive against the same public Ubuntu endpoint. Each
+tool ran three times, every destination passed SHA-256 verification, and
+Quiczilla was forced to `stun-quic`:
+
+| Tool | Median throughput | Runs (MiB/s) |
+| :--- | ---: | :--- |
+| **Quiczilla v0.1.12** | **27.86 MiB/s** | 28.56, 27.49, 27.86 |
+| SCP | 14.05 MiB/s | 14.85, 14.05, 12.01 |
+
+Quiczilla was approximately 98% faster than SCP for this run. Rsync was not
+included in this rerun because the Windows rsync installation failed with
+protocol error 12 even for a small diagnostic file; this is an endpoint
+tooling issue, so no rsync result is claimed here. The raw result file was
+`scratch/benchmark-v0.1.12-1gb-quic-scp.json`.
 
 ---
 
