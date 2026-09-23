@@ -1,4 +1,4 @@
-"""Render the public v0.1.11 batched transfer benchmark as mobile-readable SVG.
+"""Render the public three-workload transfer benchmark as mobile-readable SVG.
 
 Run from the repository root:
     python benchmarks/plot_transfer_performance.py
@@ -15,7 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-OUTPUT = Path(__file__).with_name("transfer-performance-v0.1.11.svg")
+OUTPUT = Path(__file__).with_name("transfer-performance.svg")
 
 # Median wall-clock measurements from three SHA-256-verified 1 GiB uploads over
 # the public STUN/SSH route. Throughput is MiB/s; time is seconds.
@@ -32,7 +32,7 @@ COLORS = ("#2563eb", "#f59e0b", "#64748b")  # blue, amber, slate
 def main() -> None:
     matplotlib.rcParams.update(
         {
-            "svg.hashsalt": "quiczilla-v0.1.11",
+            "svg.hashsalt": "quiczilla-three-workload-baseline",
             "font.family": "DejaVu Sans",
             "font.size": 12,
         }
@@ -41,7 +41,7 @@ def main() -> None:
     figure.subplots_adjust(top=0.89, bottom=0.12, hspace=0.55)
     figure.patch.set_facecolor("white")
     figure.suptitle(
-        "Public DDNS transfer benchmark — v0.1.11",
+        "Public DDNS transfer benchmark — three workload profiles",
         fontsize=20,
         fontweight="bold",
     )
