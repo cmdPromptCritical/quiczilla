@@ -7,7 +7,7 @@ or machine-specific paths here. Use RFC 5737 documentation addresses and
 
 ## Current status
 
-- **Release line:** `v0.1.12` (pending GitHub release validation).
+- **Release line:** `v0.1.12` (published and live-validated on Windows-to-Linux).
 - **Platforms:** x86_64 Windows and Linux release archives are assembled by
   GitHub Actions. Each archive contains the CLI, the matching worker, and its
   MsQuic runtime.
@@ -99,3 +99,8 @@ commit those values or their output.
 - One-shot transfers flush their final output and take a process-terminal
   success path after the peer confirms completion, avoiding a native MsQuic
   teardown hang after a successful transfer.
+- Published `v0.1.12` was verified from its GitHub Windows archive (`quiczilla
+  0.1.12`) against a Linux worker: both default directory detection and the
+  explicit `send` command completed over STUN-assisted QUIC. A nested tree,
+  empty directory, text files, and a 1 MiB binary were checked with matching
+  SHA-256 hashes; temporary remote fixtures were removed afterward.
