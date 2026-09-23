@@ -202,7 +202,7 @@ Quiczilla was approximately 98% faster than SCP for this run. Rsync was not
 included in this rerun because the Windows rsync installation failed with
 protocol error 12 even for a small diagnostic file; this is an endpoint
 tooling issue, so no rsync result is claimed here. The raw result file was
-`scratch/benchmark-v0.1.12-1gb-quic-scp.json`.
+retained locally as `scratch/benchmark-v0.1.12-1gb-quic-scp.json`.
 
 ---
 
