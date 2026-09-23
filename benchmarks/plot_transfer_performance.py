@@ -20,8 +20,8 @@ OUTPUT = Path(__file__).with_name("transfer-performance.svg")
 # Median wall-clock measurements from three SHA-256-verified 1 GiB uploads over
 # the public STUN/SSH route. Throughput is MiB/s; time is seconds.
 SCENARIOS = (
-    ("16,384 × 64 KiB · tar pipe", (27.78, 2.42, 15.22), (36.86, 423.25, 67.26)),
-    ("102 × 10 MiB + 4 MiB · tar pipe", (27.30, 18.72, 18.09), (37.51, 54.71, 56.61)),
+    ("16,384 × 64 KiB", (27.78, 2.42, 15.22), (36.86, 423.25, 67.26)),
+    ("102 × 10 MiB + 4 MiB", (27.30, 18.72, 18.09), (37.51, 54.71, 56.61)),
     ("1 × 1 GiB · file mode", (28.06, 19.85, 19.42), (36.49, 51.59, 52.74)),
 )
 
