@@ -1930,7 +1930,7 @@ fn bootstrap_remote_worker(
         } else if verbose {
             eprintln!("Worker bundle cache hit");
         }
-        run_cached_worker(
+        let child = run_cached_worker(
             platform,
             ssh_target,
             &bundle_dir,
@@ -1939,7 +1939,9 @@ fn bootstrap_remote_worker(
             verbose,
             ssh_port,
             ssh_identity,
-        )?
+        )?;
+        prune_remote_worker_cache(platform, ssh_target, ssh_port, ssh_identity, verbose);
+        child
     };
 
     // A remote cache may be mounted `noexec`. If the managed worker exits
@@ -2222,6 +2224,52 @@ fn run_cached_worker(
         .stderr(worker_stderr(verbose))
         .spawn()
         .context("Failed to start cached remote worker")
+}
+
+/// Keep the active bundle plus the two most recent historical bundles. Cache
+/// cleanup is deliberately best-effort: an SSH target may have a read-only
+/// cache, an active Windows executable may still be locked, or an administrator
+/// may impose a no-delete policy. None of those conditions should fail a
+/// transfer that already has a runnable worker.
+fn prune_remote_worker_cache(
+    platform: RemotePlatform,
+    ssh_target: &str,
+    ssh_port: Option<u16>,
+    ssh_identity: Option<&str>,
+    verbose: bool,
+) {
+    let prune_cmd = match platform {
+        RemotePlatform::LinuxX86_64 => {
+            "find ~/.cache/quiczilla -mindepth 1 -maxdepth 1 -type d -name 'bundle-*' -printf '%T@ %p\\n' 2>/dev/null | sort -rn | tail -n +4 | cut -d' ' -f2- | while IFS= read -r bundle; do [ -z \"$bundle\" ] || rm -rf -- \"$bundle\"; done".to_string()
+        }
+        RemotePlatform::WindowsX86_64 => {
+            "powershell -NoProfile -Command \"$root=Join-Path $env:LOCALAPPDATA 'quiczilla'; if (Test-Path -LiteralPath $root) { Get-ChildItem -LiteralPath $root -Directory -Filter 'bundle-*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }\"".to_string()
+        }
+    };
+
+    let result = ssh_command(ssh_port, ssh_identity)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=no")
+        .arg(ssh_target)
+        .arg(prune_cmd)
+        .stdin(Stdio::null())
+        .output();
+    if verbose {
+        if let Ok(output) = result {
+            if output.status.success() {
+                eprintln!("Pruned remote worker cache; retaining the three newest bundles.");
+            } else {
+                eprintln!(
+                    "Remote worker-cache cleanup skipped: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+        } else {
+            eprintln!("Remote worker-cache cleanup skipped: SSH command failed to start.");
+        }
+    }
 }
 use quiczilla_core::types::ProgressInfo;
 use std::io::Read;

@@ -104,3 +104,6 @@ commit those values or their output.
   explicit `send` command completed over STUN-assisted QUIC. A nested tree,
   empty directory, text files, and a 1 MiB binary were checked with matching
   SHA-256 hashes; temporary remote fixtures were removed afterward.
+- Managed remote worker caches now retain the three newest content-addressed
+  bundles after a worker starts. Pruning is best-effort and non-fatal to handle
+  active Windows executable locks, read-only caches, and administrator policy.

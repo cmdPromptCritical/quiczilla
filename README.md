@@ -382,6 +382,10 @@ directory never overwrites a worker that another transfer is still executing.
 If that managed location cannot execute—for example, due to a `noexec`
 policy—Quiczilla warns and uses the existing installed worker instead. Future
 releases will add an explicit protocol-compatibility check to that fallback.
+After a managed worker starts, Quiczilla best-effort prunes its remote cache to
+the three newest content-addressed bundles (the active bundle plus two recent
+ones). Cleanup failures are non-fatal, so locked Windows executables,
+read-only caches, or administrator policies cannot interrupt a transfer.
 
 ---
 
