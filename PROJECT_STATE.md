@@ -107,3 +107,8 @@ commit those values or their output.
 - Managed remote worker caches now retain the three newest content-addressed
   bundles after a worker starts. Pruning is best-effort and non-fatal to handle
   active Windows executable locks, read-only caches, and administrator policy.
+- Added `docs/PRODUCTION_TEST_PLAN.md`, defining the container topology,
+  protocol/fuzz/network/load/security/release test layers, platform limits,
+  daemon operational requirements, and alpha/release-candidate/production
+  gates. It records that containers are the repeatable Linux layer, not a
+  substitute for Windows, physical storage, or public-NAT testing.
