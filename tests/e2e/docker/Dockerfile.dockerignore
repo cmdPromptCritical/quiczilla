@@ -1,0 +1,9 @@
+target/
+**/target/
+reference-csharp/
+.git/
+.agent/
+scratch/
+tests/e2e/results/
+**/*.bin
+benchmark-*.json

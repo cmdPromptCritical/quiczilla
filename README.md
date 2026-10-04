@@ -423,6 +423,19 @@ cargo test --workspace --lib
 cargo build --release
 ```
 
+### Automated Container E2E Test Suite
+
+An ad hoc Docker and Kubernetes test suite is available under [`tests/e2e/`](tests/e2e/) to validate transfers across containers, simulate network impairment (`tc netem`), test `noexec` worker cache fallback, and run STUN discovery canaries:
+
+```bash
+# Run the fast smoke suite in Docker
+./tests/e2e/run.sh smoke
+
+# Run with local isolated coturn STUN sidecar
+./tests/e2e/run.sh smoke --local-stun
+```
+
+
 ---
 
 ## Roadmap

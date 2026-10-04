@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: quiczilla-e2e-client
+  labels:
+    app: quiczilla-e2e
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: quiczilla-e2e
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: e2e-client
+          image: quiczilla-e2e:local
+          imagePullPolicy: IfNotPresent
+          command: ["/e2e/docker/entrypoint.sh", "client", "/e2e/runner.sh", "split"]
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+          env:
+            - name: QZ_TOPOLOGY
+              value: "t2-k8s-split"
+            - name: QZ_SERVER_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: quiczilla-e2e-config
+                  key: server_host
+            - name: QZ_SERVER_SSH_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: quiczilla-e2e-config
+                  key: server_ssh_port
+                  optional: true
+            - name: QZ_E2E_STUN
+              valueFrom:
+                configMapKeyRef:
+                  name: quiczilla-e2e-config
+                  key: stun_server
+                  optional: true
+          volumeMounts:
+            - name: ssh-key
+              mountPath: /keys
+            - name: results
+              mountPath: /results
+      volumes:
+        - name: ssh-key
+          secret:
+            secretName: quiczilla-e2e-ssh-key
+            defaultMode: 0600
+        - name: results
+          emptyDir: {}

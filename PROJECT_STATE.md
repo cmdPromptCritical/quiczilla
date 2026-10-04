@@ -112,3 +112,18 @@ commit those values or their output.
   daemon operational requirements, and alpha/release-candidate/production
   gates. It records that containers are the repeatable Linux layer, not a
   substitute for Windows, physical storage, or public-NAT testing.
+- Added `tests/e2e/` providing an automated end-to-end container test suite for
+  Docker and Kubernetes:
+  - Multi-stage `Dockerfile` supporting local working-tree source builds and
+    checksum-verified release archives in a clean Ubuntu runtime without
+    system MsQuic packages.
+  - Topology T1 Docker Compose environment with non-root SSH daemon, per-run key
+    isolation, and optional local `coturn` sidecar.
+  - Topology T2 Kubernetes Job manifest (`k8s/client-job.yaml`) for split-site
+    cluster NAT-to-edge NAT traversal validation.
+  - Complete test tier suite: Smoke (S1–S7), Fault Injection / Regression
+    (R1–R11 with `tc netem` impairment and iptables simulation), and Split-Site
+    WAN STUN (X1–X4).
+  - Machine-readable structured reports (`summary.json` and `results.jsonl`)
+    with SHA-256 manifests, receipt assertions, and metrics collection.
+

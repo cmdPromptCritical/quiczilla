@@ -1,0 +1,61 @@
+# Quiczilla container E2E topology T1: one Docker host, two containers.
+# Normally driven by tests/e2e/run.sh; see tests/e2e/README.md.
+name: quiczilla-e2e
+
+x-qz-build: &qz-build
+  context: ../..
+  dockerfile: tests/e2e/docker/Dockerfile
+  args:
+    QZ_SOURCE: ${QZ_SOURCE:-local}
+    QZ_RELEASE_TAG: ${QZ_RELEASE_TAG:-}
+    QZ_GIT_COMMIT: ${QZ_GIT_COMMIT:-unknown}
+    UBUNTU_VERSION: ${QZ_UBUNTU_VERSION:-22.04}
+
+services:
+  server:
+    image: quiczilla-e2e:${QZ_IMAGE_TAG:-local}
+    build: *qz-build
+    command: ["server"]
+    hostname: server
+    cap_add: [NET_ADMIN]
+    volumes:
+      - keys:/keys:ro
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/qz-e2e-server-ready && pgrep -x sshd >/dev/null"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  client:
+    image: quiczilla-e2e:${QZ_IMAGE_TAG:-local}
+    build: *qz-build
+    command: ["client"]
+    hostname: client
+    cap_add: [NET_ADMIN]
+    environment:
+      QZ_SERVER_HOST: server
+      QZ_TOPOLOGY: t1-compose
+      QZ_E2E_STUN: ${QZ_E2E_STUN:-}
+      QZ_E2E_STUN_ALLOW_PRIVATE: ${QZ_E2E_STUN_ALLOW_PRIVATE:-0}
+      QZ_E2E_LARGE_BYTES: ${QZ_E2E_LARGE_BYTES:-268435456}
+      QZ_IMAGE_ID: ${QZ_IMAGE_ID:-unknown}
+    volumes:
+      - keys:/keys
+      - ${QZ_RESULTS_DIR:-./results}:/results
+
+  # Optional local STUN for heavy matrices, so the production service is only
+  # used as a canary. Enable with: run.sh --local-stun
+  coturn:
+    image: coturn/coturn:4.6
+    profiles: ["local-stun"]
+    command:
+      - "-n"
+      - "--stun-only"
+      - "--listening-port=3478"
+      - "--no-cli"
+      - "--no-tls"
+      - "--no-dtls"
+      - "--log-file=stdout"
+
+volumes:
+  keys: {}
