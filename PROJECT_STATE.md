@@ -137,4 +137,19 @@ commit those values or their output.
   - Updated worker pipe execution to gracefully drain child process output without
     arbitrary premature cancellation.
   - Added timeout safeguards to identity generation in the E2E test runner harness.
+  - Bounded directory temporary staging file names (`.quic-part`) so long names
+    (up to 254 bytes) do not exceed filesystem `NAME_MAX` (255 bytes).
+  - Selected concurrently between directory transfer sending and receiver ACK
+    reading in the CLI, surfacing receiver rejection immediately and preventing
+    stream flow control deadlocks.
+  - Fully detached background worker daemons launched across SSH in test cases,
+    ensuring standard streams detach cleanly and OpenSSH returns immediately.
+- Containerized E2E Smoke suite verified green on remote test host (`7 passed, 0 failed, 0 skipped`):
+  - `S1`: Identity and binary digest verification (0.68s).
+  - `S2`: Coturn STUN canary (10.67s).
+  - `S3`: Forced transports ladder (`direct-quic`, `manual-quic`, `ssh-fallback`, `auto`) (6.29s).
+  - `S4`: Size edge matrix from 0 bytes up to 256 MiB (14.44s).
+  - `S5`: Native streamed directory tree with 307 files, deep nesting, and long names (2.34s).
+  - `S6`: Bidirectional raw pipe tar extraction and remote SHA-256 digest streaming (3.58s).
+  - `S7`: Cross-container persistent daemon verified transfers, conflict refusal, and rogue/wrong-pin rejection (2.17s).
 
