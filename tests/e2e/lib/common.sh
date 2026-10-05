@@ -12,7 +12,7 @@ set -uo pipefail
 : "${QZ_SERVER_HOST:=server}"
 : "${QZ_SERVER_USER:=qz}"
 : "${QZ_SERVER_SSH_PORT:=22}"
-: "${QZ_BIN:=quic}"
+: "${QZ_BIN:=/opt/quiczilla/quiczilla}"
 : "${QZ_WORKER_BIN:=/opt/quiczilla/quiczilla-worker}"
 : "${QZ_REMOTE_WORKER_BIN:=/opt/quiczilla/quiczilla-worker}"
 : "${QZ_REMOTE_BASE:=/home/qz/e2e}"

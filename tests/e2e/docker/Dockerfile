@@ -94,8 +94,11 @@ RUN apt-get update \
  && mkdir -p /run/sshd
 COPY --from=artifacts /out/ /opt/quiczilla/
 RUN chmod 0755 /opt/quiczilla/quiczilla /opt/quiczilla/quiczilla-worker \
+ && echo "/opt/quiczilla" > /etc/ld.so.conf.d/quiczilla.conf \
+ && ldconfig \
  && printf '{"source":"%s","release_tag":"%s","git_commit":"%s"}\n' \
       "${QZ_SOURCE}" "${QZ_RELEASE_TAG}" "${QZ_GIT_COMMIT}" > /opt/quiczilla/BUILD_INFO.json
+ENV LD_LIBRARY_PATH=/opt/quiczilla:${LD_LIBRARY_PATH:-}
 COPY tests/e2e/ /e2e/
 RUN find /e2e -type f \( -name '*.sh' \) -exec sed -i 's/\r$//' {} + \
  && chmod 0755 /e2e/*.sh /e2e/cases/*.sh /e2e/docker/entrypoint.sh

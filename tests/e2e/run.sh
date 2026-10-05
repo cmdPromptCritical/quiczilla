@@ -97,7 +97,11 @@ QZ_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "quiczilla-e2e:${QZ_IMAGE
 "${compose[@]}" "${profiles[@]}" up -d --no-build --wait
 
 set +e
-"${compose[@]}" exec -T -e QZ_RUN_ID="$run_id" client /e2e/runner.sh "$tier" "${cases[@]}"
+"${compose[@]}" exec -T \
+  -e QZ_RUN_ID="$run_id" \
+  -e QZ_E2E_STUN="${QZ_E2E_STUN:-}" \
+  -e QZ_E2E_STUN_ALLOW_PRIVATE="${QZ_E2E_STUN_ALLOW_PRIVATE:-0}" \
+  client /e2e/runner.sh "$tier" "${cases[@]}"
 status=$?
 set -e
 
