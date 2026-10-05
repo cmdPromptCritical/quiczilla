@@ -88,7 +88,7 @@ if [[ "$build" -eq 1 ]]; then
       --build-arg QZ_SOURCE --build-arg QZ_RELEASE_TAG --build-arg QZ_GIT_COMMIT \
       -t "quiczilla-e2e:${QZ_IMAGE_TAG}" "$repo"
   else
-    "${compose[@]}" build server
+    "${compose[@]}" build
   fi
 fi
 export QZ_IMAGE_ID

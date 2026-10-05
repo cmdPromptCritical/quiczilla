@@ -87,6 +87,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates openssh-server openssh-client iproute2 iptables jq \
       python3 time procps sudo tar coreutils findutils netcat-openbsd \
+      libnuma1 libssl3 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -m -s /bin/bash qz \
  && echo 'qz ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/qz \
