@@ -152,4 +152,10 @@ commit those values or their output.
   - `S5`: Native streamed directory tree with 307 files, deep nesting, and long names (2.34s).
   - `S6`: Bidirectional raw pipe tar extraction and remote SHA-256 digest streaming (3.58s).
   - `S7`: Cross-container persistent daemon verified transfers, conflict refusal, and rogue/wrong-pin rejection (2.17s).
+- GitHub Actions CI matrix (`ubuntu-22.04` and `windows-2022`) verified 100% green:
+  - Resolved `clippy::incompatible-msrv` failure in `core/src/directory.rs` by replacing
+    `floor_char_boundary` (Rust 1.91+) with an `is_char_boundary` loop compatible
+    with the repository's Rust 1.85.0 MSRV.
+  - All workflow stages (Workspace Check, Unit/Integration Tests, Clippy Linter `-D warnings`,
+    binary build, and persistent daemon E2E on Linux & Windows) completed with success.
 
