@@ -341,7 +341,13 @@ pub async fn receive_directory<R: AsyncRead + Unpin>(
                         bail!("refusing to replace destination symlink");
                     }
                 }
-                let partial = parent.join(format!(".{}.quic-part", name.to_string_lossy()));
+                let name_lossy = name.to_string_lossy();
+                let stem = if name_lossy.len() <= 240 {
+                    &name_lossy
+                } else {
+                    &name_lossy[..name_lossy.floor_char_boundary(240)]
+                };
+                let partial = parent.join(format!(".{stem}.quic-part"));
                 let mut output = tokio::fs::File::create(&partial).await?;
                 let mut remaining = size;
                 let mut buffer = vec![0u8; FILE_CHUNK_SIZE];

@@ -247,6 +247,8 @@ async fn main() -> Result<()> {
         "public_udp_addr": public_udp_addr.map(|address| address.to_string())
     });
     println!("{}", json_output);
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
 
     let cancel = CancellationToken::new();
 

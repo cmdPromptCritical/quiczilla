@@ -1257,9 +1257,32 @@ async fn run_directory_transfer_cli(args: &[String], output: OutputOptions) -> C
         profile.pack_target_bytes() / 1024 / 1024
     ));
     let transfer_start = Instant::now();
-    let sent = send_directory(&mut send, source, profile, checksum).await?;
-    send.shutdown().await?;
-    let acknowledged = read_directory_ack(&mut recv).await?;
+    let send_task = async {
+        let res = send_directory(&mut send, source, profile, checksum).await;
+        let _ = send.shutdown().await;
+        res
+    };
+    tokio::pin!(send_task);
+
+    let (sent, acknowledged) = tokio::select! {
+        ack_res = read_directory_ack(&mut recv) => {
+            let ack = ack_res?;
+            let sent = match tokio::time::timeout(Duration::from_secs(5), &mut send_task).await {
+                Ok(res) => res?,
+                Err(_) => DirectoryTransferStats {
+                    files: ack.files,
+                    bytes: ack.bytes,
+                    ..Default::default()
+                },
+            };
+            (sent, ack)
+        }
+        send_res = &mut send_task => {
+            let sent = send_res?;
+            let ack = read_directory_ack(&mut recv).await?;
+            (sent, ack)
+        }
+    };
     let elapsed = transfer_start.elapsed().as_secs_f64().max(0.001);
     let mib_per_second = sent.bytes as f64 / 1_048_576.0 / elapsed;
     let stats = DirectoryTransferStats {
