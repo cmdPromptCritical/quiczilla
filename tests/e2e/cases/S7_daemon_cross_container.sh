@@ -24,7 +24,7 @@ rogue_tp="$(client_identity "$WORK/rogue-identity")"
 [[ "$client_tp" != "$rogue_tp" ]] || fail "identities are not distinct"
 
 remote "mkdir -p $(q "$rdir/recv") && printf '# authorized e2e client\n%s\n' $client_tp > $(q "$rdir/allow")"
-remote "(cd $(q "$rdir") && nohup $(q "$QZ_REMOTE_WORKER_BIN") --daemon --port $port \
+remote "cd $(q "$rdir") && (nohup $(q "$QZ_REMOTE_WORKER_BIN") --daemon --port $port \
   --allow-thumbprints allow --save-dir recv --identity-dir server-identity \
   --on-conflict refuse > daemon.out 2> daemon.err < /dev/null & echo \$! > daemon.pid) >/dev/null 2>&1 < /dev/null"
 
