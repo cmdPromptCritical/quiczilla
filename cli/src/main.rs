@@ -1299,7 +1299,9 @@ async fn run_directory_transfer_cli(args: &[String], output: OutputOptions) -> C
     }
     let _ = bootstrap.child.kill();
     let _ = bootstrap.child.wait();
-    Ok(())
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(0);
 }
 
 async fn run_pipe_cli(args: &[String], output: OutputOptions) -> Result<()> {
@@ -1464,6 +1466,8 @@ async fn run_pipe_cli(args: &[String], output: OutputOptions) -> Result<()> {
 
     let _ = bootstrap.child.kill();
     let _ = bootstrap.child.wait();
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
 
     std::process::exit(0);
 }
@@ -1534,7 +1538,9 @@ async fn run_identity_cli(args: &[String]) -> Result<()> {
     let (thumbprint, _config) = build_persistent_quic_config(&engine, false, &identity_dir)?;
     eprintln!("Persistent client identity: {}", identity_dir.display());
     println!("{thumbprint}");
-    Ok(())
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(0);
 }
 
 async fn run_direct_cli(args: &[String], output: OutputOptions) -> CliResult<()> {
@@ -1694,7 +1700,9 @@ async fn run_direct_cli(args: &[String], output: OutputOptions) -> CliResult<()>
     }
     // MsQuic owns background callbacks beyond Tokio task completion. Match the
     // SSH-bootstrap transfer path and let the OS close those native handles.
-    Ok(())
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(0);
 }
 
 fn bootstrap_remote_worker(

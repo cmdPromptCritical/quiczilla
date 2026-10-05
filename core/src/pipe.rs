@@ -106,7 +106,6 @@ where
                             Ok(0) => {
                                 // Remote signalled FIN (clean EOF)
                                 let _ = writer.flush().await;
-                                cancel_recv.cancel();
                                 break;
                             }
                             Ok(n) => {

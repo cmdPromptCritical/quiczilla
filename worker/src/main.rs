@@ -389,8 +389,10 @@ async fn handle_incoming_connection(
             let cancel_child = cancel.clone();
             let child_wait = tokio::spawn(async move {
                 let s = child.wait().await;
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                cancel_child.cancel();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    cancel_child.cancel();
+                });
                 s
             });
 

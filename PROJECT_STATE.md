@@ -126,4 +126,15 @@ commit those values or their output.
     WAN STUN (X1–X4).
   - Machine-readable structured reports (`summary.json` and `results.jsonl`)
     with SHA-256 manifests, receipt assertions, and metrics collection.
+- Hardened CLI and worker teardown and streaming paths against native MsQuic hangs:
+  - Extended process-terminal exit (`std::process::exit(0)`) after receipts are
+    flushed to `run_directory_transfer_cli`, `run_pipe_cli`, `run_identity_cli`,
+    and `run_direct_cli`. This avoids indefinite blocks inside `RegistrationClose`
+    during Linux runtime shutdown.
+  - Corrected pipe duplex stream lifecycle in `core/src/pipe.rs` so receiving remote
+    EOF/FIN does not cancel the outbound sending task before bidirectional
+    commands (e.g. `sha256sum`) finish outputting their results to the client.
+  - Updated worker pipe execution to gracefully drain child process output without
+    arbitrary premature cancellation.
+  - Added timeout safeguards to identity generation in the E2E test runner harness.
 

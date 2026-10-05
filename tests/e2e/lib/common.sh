@@ -213,7 +213,7 @@ PY
 
 # client_identity <dir>: create/print a persistent client thumbprint.
 client_identity() {
-  "$QZ_BIN" identity --identity-dir "$1" 2>/dev/null | tail -n 1 | tr -d '\r'
+  timeout 15 "$QZ_BIN" identity --identity-dir "$1" 2>/dev/null | tail -n 1 | tr -d '\r'
 }
 
 # resolve_ipv4 <host>
