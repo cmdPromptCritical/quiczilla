@@ -345,7 +345,11 @@ pub async fn receive_directory<R: AsyncRead + Unpin>(
                 let stem = if name_lossy.len() <= 240 {
                     &name_lossy
                 } else {
-                    &name_lossy[..name_lossy.floor_char_boundary(240)]
+                    let mut limit = 240.min(name_lossy.len());
+                    while limit > 0 && !name_lossy.is_char_boundary(limit) {
+                        limit -= 1;
+                    }
+                    &name_lossy[..limit]
                 };
                 let partial = parent.join(format!(".{stem}.quic-part"));
                 let mut output = tokio::fs::File::create(&partial).await?;
