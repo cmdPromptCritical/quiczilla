@@ -7,7 +7,7 @@ or machine-specific paths here. Use RFC 5737 documentation addresses and
 
 ## Current status
 
-- **Release line:** `v0.1.12` (published and live-validated on Windows-to-Linux).
+- **Release line:** `v0.1.13`.
 - **Platforms:** x86_64 Windows and Linux release archives are assembled by
   GitHub Actions. Each archive contains the CLI, the matching worker, and its
   MsQuic runtime.
@@ -190,3 +190,8 @@ commit those values or their output.
   - Added `fuzz/` crate with libFuzzer targets: `fuzz_directory_frames`, `fuzz_control_message`, `fuzz_relative_path`, and `fuzz_handshake`.
   - Added companion unit and property test suite in `core/tests/fuzz_property_tests.rs` verifying parser robustness, path safety, and control message decoding on standard toolchains.
   - All workspace tests (`cargo test --workspace`) and E2E regression tests (R1–R11) pass 100% green.
+- Prepared and verified release `v0.1.13`:
+  - Bumped workspace version to `0.1.13` across `Cargo.toml`, `Cargo.lock`, and `fuzz/Cargo.lock`.
+  - Verified `quiczilla-cli --version` embeds `quiczilla 0.1.13` matching the release tag.
+  - Verified `release.yml` workflow pipeline builds and packages CLI and worker with embedded assets for Linux and Windows.
+
