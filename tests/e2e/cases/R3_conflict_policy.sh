@@ -36,9 +36,9 @@ metric "standard_overwrite_ok" true
 # --- Part 2: Refuse policy in daemon mode ---
 client_tp="$(client_identity "$WORK/client-identity")"
 remote "mkdir -p $(q "$rdir/daemon_recv") && printf '# authorized\n%s\n' $client_tp > $(q "$rdir/allow")"
-remote "cd $(q "$rdir") && nohup $(q "$QZ_REMOTE_WORKER_BIN") --daemon --port $port \
+remote "cd $(q "$rdir") && (nohup $(q "$QZ_REMOTE_WORKER_BIN") --daemon --port $port \
   --allow-thumbprints allow --save-dir daemon_recv --identity-dir daemon-identity \
-  --on-conflict refuse > daemon.out 2> daemon.err < /dev/null & echo \$! > daemon.pid"
+  --on-conflict refuse > daemon.out 2> daemon.err < /dev/null & echo \$! > daemon.pid) >/dev/null 2>&1 < /dev/null"
 
 server_tp=""
 for _ in $(seq 1 100); do

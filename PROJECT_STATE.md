@@ -40,9 +40,8 @@ commit those values or their output.
 1. Maintain a reliable, high-throughput CLI for SSH-managed infrastructure.
 2. Benchmark direct QUIC and SCP on the same route before making performance
    claims.
-3. Add protocol-compatibility negotiation before relying on an outdated
-   installed worker as a production fallback.
-4. Keep daemon authorization explicit through mTLS thumbprint allow-lists.
+3. Keep daemon authorization explicit through mTLS thumbprint allow-lists.
+4. Prepare Phase 2 desktop GUI integration atop the verified CLI/MsQuic engine.
 
 ## Architectural invariants
 
@@ -158,4 +157,36 @@ commit those values or their output.
     with the repository's Rust 1.85.0 MSRV.
   - All workflow stages (Workspace Check, Unit/Integration Tests, Clippy Linter `-D warnings`,
     binary build, and persistent daemon E2E on Linux & Windows) completed with success.
-
+- Containerized E2E Fault Injection & Regression Suite (R1–R11) verified 100% green (`11 passed, 0 failed, 0 skipped`):
+  - `R1`: Fallback ladder across blocked STUN and non-QUIC routes (14.49s). Worker soft-fails STUN discovery.
+  - `R2`: Transfer interruption and cold resumption with prefix fingerprint verification (6.36s).
+  - `R3`: Remote destination conflict policies (`overwrite` and `refuse`) (2.52s).
+  - `R4`: Path traversal sanitization, escaping, and illegal character refusal (3.23s).
+  - `R5`: Destination disk failure handling, cancellation propagation, and hang-free teardown (3.56s).
+  - `R6`: Zero-trust `noexec` cache detection with preinstalled worker fallback (3.30s).
+  - `R7`: Version skew managed bundle refresh and 3-bundle retention pruning (4.20s).
+  - `R8`: High-concurrency 4x parallel bootstrap transfers against cold cache and 8x concurrent daemon streams (3.87s). Resolved bundle upload races with atomic staging directories (`staging-{hash}-{token}`).
+  - `R9`: QUIC transport under `tc netem` impairment (50ms delay, 1% packet loss, 1% reordering) with SHA-256 integrity (7.87s).
+  - `R10`: Hostile UDP fuzzing, malformed headers, and garbage packet bursts against listening daemon (1.99s).
+  - `R11`: Resource ceilings verifying bounded client memory consumption (Peak RSS << 256 MB) on 64 MiB payloads (2.82s).
+- Implemented protocol compatibility and capability negotiation:
+  - Worker advertises `protocol_version: 1` and supported features (`directory`, `pipe`, `exec_hex`, `storage_profiles`, `conflict_policy`, `checksum`, `resume`) in its JSON ready banners (`ready` and `daemon_ready`).
+  - Client validates worker protocol version during SSH bootstrap and installed worker fallback (`MIN_SUPPORTED_PROTOCOL_VERSION = 1`, `CURRENT_PROTOCOL_VERSION = 1`).
+  - Commands verify feature availability early (e.g. `directory`, `pipe`, `exec_hex`) before starting stream transmission. Legacy unversioned workers are permitted for baseline single-file transfers.
+- Implemented deterministic structured failure exit codes & error taxonomy:
+  - `0`: Success
+  - `2`: Invalid CLI invocation / argument parsing error
+  - `3`: Authentication / mTLS thumbprint failure
+  - `4`: Network failure / timeout (all UDP & SSH fallbacks exhausted)
+  - `5`: Data integrity failure (SHA-256 verification mismatch)
+  - `6`: Destination conflict / file policy refusal
+  - `7`: Protocol or version incompatibility
+  - `130`: Transfer cancelled by user
+  - Verified in containerized test `S7` where `rejected_exit_codes` cleanly captures `{"conflict": 6, "rogue": 3, "wrong_pin": 3}`.
+- Hardened stream length bounds and security invariants:
+  - Enforced `MAX_CONTROL_MESSAGE_BYTES` (64 KiB) across stream readers in `core/src/peer.rs` and `core/src/peer_generic.rs` to prevent memory exhaustion from hostile unbounded length headers.
+  - Hardened relative path validation in `core/src/directory.rs` against leading tildes, environment variable syntax (`$`), and redundant dot-segment obfuscation (`.`, `..`).
+- Implemented libFuzzer harness and property test suite:
+  - Added `fuzz/` crate with libFuzzer targets: `fuzz_directory_frames`, `fuzz_control_message`, `fuzz_relative_path`, and `fuzz_handshake`.
+  - Added companion unit and property test suite in `core/tests/fuzz_property_tests.rs` verifying parser robustness, path safety, and control message decoding on standard toolchains.
+  - All workspace tests (`cargo test --workspace`) and E2E regression tests (R1–R11) pass 100% green.

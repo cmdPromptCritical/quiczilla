@@ -264,6 +264,15 @@ impl Drop for MsQuicEngine {
     fn drop(&mut self) {
         if !self.registration.is_null() {
             if let Ok(api) = super::ffi::get_api() {
+                if let Some(shutdown_fn) = api.RegistrationShutdown {
+                    unsafe {
+                        shutdown_fn(
+                            self.registration,
+                            super::ffi::QUIC_CONNECTION_SHUTDOWN_FLAGS_QUIC_CONNECTION_SHUTDOWN_FLAG_SILENT,
+                            0,
+                        );
+                    }
+                }
                 if let Some(close_fn) = api.RegistrationClose {
                     unsafe { close_fn(self.registration) };
                 }
@@ -276,6 +285,7 @@ struct ConnectionContext {
     connect_tx: Option<oneshot::Sender<Result<()>>>,
     stream_tx: mpsc::UnboundedSender<MsQuicStream>,
     allowed_peer_thumbprints: Vec<String>,
+    shutdown_reason: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 unsafe extern "C" fn connection_callback(
@@ -356,11 +366,24 @@ unsafe extern "C" fn connection_callback(
                 ev_data.ErrorCode,
                 ev_data.ErrorCode
             );
-            if let Some(tx) = ctx.connect_tx.take() {
-                let _ = tx.send(Err(anyhow::anyhow!(
+            let is_tls = (0x0100..=0x01ff).contains(&ev_data.ErrorCode)
+                || ev_data.Status == super::ffi::QUIC_STATUS_BAD_CERTIFICATE;
+            let err_msg = if is_tls {
+                format!(
+                    "TLS handshake / certificate verification failure (Status 0x{:08x}, ErrorCode 0x{:x})",
+                    ev_data.Status, ev_data.ErrorCode
+                )
+            } else {
+                format!(
                     "Connection failed with transport error 0x{:08x}",
                     ev_data.Status
-                )));
+                )
+            };
+            if let Ok(mut lock) = ctx.shutdown_reason.lock() {
+                *lock = Some(err_msg.clone());
+            }
+            if let Some(tx) = ctx.connect_tx.take() {
+                let _ = tx.send(Err(anyhow::anyhow!(err_msg)));
             }
         }
         QUIC_CONNECTION_EVENT_TYPE_QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER => {
@@ -370,8 +393,20 @@ unsafe extern "C" fn connection_callback(
                 ev_data.ErrorCode,
                 ev_data.ErrorCode
             );
+            let is_tls = (0x0100..=0x01ff).contains(&ev_data.ErrorCode);
+            let err_msg = if is_tls {
+                format!(
+                    "Peer rejected connection due to TLS certificate verification failure (ErrorCode 0x{:x})",
+                    ev_data.ErrorCode
+                )
+            } else {
+                format!("Peer shutdown (ErrorCode 0x{:x})", ev_data.ErrorCode)
+            };
+            if let Ok(mut lock) = ctx.shutdown_reason.lock() {
+                *lock = Some(err_msg.clone());
+            }
             if let Some(tx) = ctx.connect_tx.take() {
-                let _ = tx.send(Err(anyhow::anyhow!("Peer shutdown")));
+                let _ = tx.send(Err(anyhow::anyhow!(err_msg)));
             }
         }
         QUIC_CONNECTION_EVENT_TYPE_QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED => {
@@ -410,6 +445,7 @@ pub struct MsQuicConnection {
     pub handle: HQUIC,
     _ctx_box: Box<ConnectionContext>,
     pub stream_rx: mpsc::UnboundedReceiver<MsQuicStream>,
+    pub shutdown_reason: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 unsafe impl Send for MsQuicConnection {}
@@ -446,6 +482,10 @@ impl Drop for PendingConnection {
 }
 
 impl MsQuicConnection {
+    pub fn shutdown_reason(&self) -> Option<String> {
+        self.shutdown_reason.lock().ok().and_then(|r| r.clone())
+    }
+
     pub async fn connect(
         engine: &MsQuicEngine,
         config: &MsQuicConfiguration,
@@ -459,11 +499,13 @@ impl MsQuicConnection {
 
         let (connect_tx, connect_rx) = oneshot::channel();
         let (stream_tx, stream_rx) = mpsc::unbounded_channel();
+        let shutdown_reason = Arc::new(std::sync::Mutex::new(None));
 
         let mut ctx_box = Box::new(ConnectionContext {
             connect_tx: Some(connect_tx),
             stream_tx,
             allowed_peer_thumbprints: expected_thumbprint.into_iter().collect(),
+            shutdown_reason: shutdown_reason.clone(),
         });
 
         let mut pending_connection = {
@@ -544,6 +586,7 @@ impl MsQuicConnection {
             handle: pending_connection.take(),
             _ctx_box: ctx_box,
             stream_rx,
+            shutdown_reason,
         })
     }
 
@@ -658,10 +701,12 @@ unsafe extern "C" fn listener_callback(
         let conn_handle = new_conn_data.Connection;
 
         let (stream_tx, stream_rx) = mpsc::unbounded_channel();
+        let shutdown_reason = Arc::new(std::sync::Mutex::new(None));
         let mut conn_ctx = Box::new(ConnectionContext {
             connect_tx: None,
             stream_tx,
             allowed_peer_thumbprints: ctx.allowed_peer_thumbprints.clone(),
+            shutdown_reason: shutdown_reason.clone(),
         });
 
         let api = match super::ffi::get_api() {
@@ -692,6 +737,7 @@ unsafe extern "C" fn listener_callback(
             handle: conn_handle,
             _ctx_box: conn_ctx,
             stream_rx,
+            shutdown_reason,
         };
 
         match ctx.conn_tx.send(msquic_conn) {

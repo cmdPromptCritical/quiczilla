@@ -10,7 +10,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/common.sh"
 prepare_dirs
 trap cleanup_remote_dir EXIT
 
-file_size=$((40 * 1024 * 1024)) # 40 MiB (triggers >= 20 MiB staging)
+file_size=$((100 * 1024 * 1024)) # 100 MiB (triggers >= 20 MiB staging)
 src="$WORK/interrupted.dat"
 make_file "$src" "$file_size"
 orig_hash="$(local_sha "$src")"
@@ -24,8 +24,15 @@ log "Starting background transfer to interrupt..."
   > "$CASE_DIR/kill.out" 2> "$CASE_DIR/kill.err" &
 transfer_pid=$!
 
-# Let transfer make some progress then kill it
-sleep 0.8
+# Wait for transfer to establish connection and start streaming bytes
+for _ in {1..100}; do
+  if grep -q "Transferring" "$CASE_DIR/kill.err" 2>/dev/null; then
+    break
+  fi
+  sleep 0.02
+done
+# Let it stream a portion of the file, then kill it
+sleep 0.05
 kill -9 "$transfer_pid" 2>/dev/null || true
 wait "$transfer_pid" 2>/dev/null || true
 

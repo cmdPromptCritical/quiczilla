@@ -71,8 +71,15 @@ pub fn validate_relative_path(value: &str) -> Result<()> {
         || value.len() > MAX_PATH_BYTES
         || value.contains('\0')
         || value.contains('\\')
+        || value.starts_with('~')
+        || value.starts_with('$')
     {
         bail!("invalid directory transfer path");
+    }
+    for segment in value.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            bail!("directory transfer path contains empty or relative segment");
+        }
     }
     let path = Path::new(value);
     if path.is_absolute() || path.has_root() || path.components().count() == 0 {

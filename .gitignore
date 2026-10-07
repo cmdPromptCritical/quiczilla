@@ -29,3 +29,4 @@ Thumbs.db
 benchmark-*.json
 scratch/
 .agent/
+tests/e2e/results*/

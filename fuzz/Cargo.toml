@@ -1,0 +1,40 @@
+[package]
+name = "quiczilla-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+quiczilla-core = { path = "../core" }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+
+[[bin]]
+name = "fuzz_directory_frames"
+path = "fuzz_targets/fuzz_directory_frames.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_control_message"
+path = "fuzz_targets/fuzz_control_message.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_relative_path"
+path = "fuzz_targets/fuzz_relative_path.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_handshake"
+path = "fuzz_targets/fuzz_handshake.rs"
+test = false
+doc = false

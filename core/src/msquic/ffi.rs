@@ -145,6 +145,8 @@ pub fn find_msquic_library() -> Result<PathBuf, anyhow::Error> {
         candidates.push(PathBuf::from("/usr/lib/x86_64-linux-gnu/libmsquic.so.2"));
         candidates.push(PathBuf::from("/usr/lib/libmsquic.so"));
         candidates.push(PathBuf::from("/usr/lib/libmsquic.so.2"));
+        candidates.push(PathBuf::from("/opt/quiczilla/libmsquic.so"));
+        candidates.push(PathBuf::from("/opt/quiczilla/libmsquic.so.2"));
 
         // Check system .NET Core App directory (sorted descending for newest MsQuic)
         if let Ok(entries) = std::fs::read_dir("/usr/share/dotnet/shared/Microsoft.NETCore.App") {

@@ -219,9 +219,13 @@ async fn main() -> Result<()> {
     // MsQuic listener. Reusing the discovered local port keeps the NAT mapping
     // associated with the port advertised to the client over SSH bootstrap.
     let (bind_port, public_udp_addr) = if let Some(server) = stun_server {
-        let candidate = quiczilla_core::stun::discover(server, bind_port)
-            .with_context(|| format!("STUN discovery failed for {server}"))?;
-        (candidate.local_port, Some(candidate.public_addr))
+        match quiczilla_core::stun::discover(server, bind_port) {
+            Ok(candidate) => (candidate.local_port, Some(candidate.public_addr)),
+            Err(e) => {
+                eprintln!("[Worker warning] STUN discovery failed for {server}: {e}");
+                (bind_port, None)
+            }
+        }
     } else {
         (bind_port, None)
     };
@@ -244,7 +248,9 @@ async fn main() -> Result<()> {
         "status": status_str,
         "udp_port": local_port,
         "thumbprint": thumbprint,
-        "public_udp_addr": public_udp_addr.map(|address| address.to_string())
+        "public_udp_addr": public_udp_addr.map(|address| address.to_string()),
+        "protocol_version": quiczilla_core::types::CURRENT_PROTOCOL_VERSION,
+        "features": quiczilla_core::types::ALL_SUPPORTED_FEATURES,
     });
     println!("{}", json_output);
     use std::io::Write as _;

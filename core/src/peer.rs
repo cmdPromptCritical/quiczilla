@@ -231,7 +231,14 @@ pub async fn run_peer(
                 }
 
                 let chunk_len = chunk.len();
-                if let Err(e) = file_send.write_all(&chunk).await {
+                let write_res = tokio::select! {
+                    res = file_send.write_all(&chunk) => res,
+                    _ = cancel_file_send.cancelled() => {
+                        send_success = false;
+                        break;
+                    }
+                };
+                if let Err(e) = write_res {
                     tracing::error!("Error writing file chunk: {e}");
                     send_success = false;
                     break;
@@ -332,7 +339,14 @@ pub async fn run_peer(
             recv_file_trigger_rx.recv().await
         {
             if let Some(parent) = dest_path.parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
+                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                    tracing::error!("Failed to create parent directory for {}: {e}", dest_path.display());
+                    let _ = control_tx_recv.send(ControlMessage::ReceivedFileFailed.serialize());
+                    let _ = event_tx_recv.send(PeerEvent::TransferComplete {
+                        status: FileTransferStatus::Etc,
+                    });
+                    break;
+                }
             }
 
             let target_write_path = if use_part {
@@ -352,28 +366,34 @@ pub async fn run_peer(
                 {
                     Ok(mut f) => {
                         if let Err(e) = f.seek(SeekFrom::Start(resume_offset)).await {
-                            let _ = event_tx_recv.send(PeerEvent::Disconnected {
-                                reason: format!("Failed to seek destination file: {e}"),
+                            tracing::error!("Failed to seek destination file {}: {e}", target_write_path.display());
+                            let _ = control_tx_recv.send(ControlMessage::ReceivedFileFailed.serialize());
+                            let _ = event_tx_recv.send(PeerEvent::TransferComplete {
+                                status: FileTransferStatus::Etc,
                             });
-                            continue;
+                            break;
                         }
                         f
                     }
                     Err(e) => {
-                        let _ = event_tx_recv.send(PeerEvent::Disconnected {
-                            reason: format!("Failed to open destination file for resume: {e}"),
+                        tracing::error!("Failed to open destination file {} for resume: {e}", target_write_path.display());
+                        let _ = control_tx_recv.send(ControlMessage::ReceivedFileFailed.serialize());
+                        let _ = event_tx_recv.send(PeerEvent::TransferComplete {
+                            status: FileTransferStatus::Etc,
                         });
-                        continue;
+                        break;
                     }
                 }
             } else {
                 match File::create(&target_write_path).await {
                     Ok(f) => f,
                     Err(e) => {
-                        let _ = event_tx_recv.send(PeerEvent::Disconnected {
-                            reason: format!("Failed to create destination file: {e}"),
+                        tracing::error!("Failed to create destination file {}: {e}", target_write_path.display());
+                        let _ = control_tx_recv.send(ControlMessage::ReceivedFileFailed.serialize());
+                        let _ = event_tx_recv.send(PeerEvent::TransferComplete {
+                            status: FileTransferStatus::Etc,
                         });
-                        continue;
+                        break;
                     }
                 }
             };
@@ -506,8 +526,10 @@ pub async fn run_peer(
             // Drop chunk_tx so writer_handle finishes its while let Some(chunk) loop
             drop(chunk_tx);
 
+            let writer_result = writer_handle.await;
+
             if recv_success {
-                let actual_hash = match writer_handle.await {
+                let actual_hash = match writer_result {
                     Ok(Ok((_, inline_hash))) => {
                         if checksum && resume_offset > 0 {
                             let p = target_write_path.clone();
@@ -525,11 +547,19 @@ pub async fn run_peer(
                     }
                     Ok(Err(e)) => {
                         tracing::error!("Disk writer error: {e}");
-                        continue;
+                        let _ = control_tx_recv.send(ControlMessage::ReceivedFileFailed.serialize());
+                        let _ = event_tx_recv.send(PeerEvent::TransferComplete {
+                            status: FileTransferStatus::Etc,
+                        });
+                        break;
                     }
                     Err(e) => {
                         tracing::error!("Writer task join error: {e}");
-                        continue;
+                        let _ = control_tx_recv.send(ControlMessage::ReceivedFileFailed.serialize());
+                        let _ = event_tx_recv.send(PeerEvent::TransferComplete {
+                            status: FileTransferStatus::Etc,
+                        });
+                        break;
                     }
                 };
 
@@ -568,7 +598,7 @@ pub async fn run_peer(
                                 let _ = event_tx_recv.send(PeerEvent::TransferComplete {
                                     status: FileTransferStatus::HashFailed,
                                 });
-                                continue;
+                                break;
                             }
                         }
 
@@ -582,8 +612,18 @@ pub async fn run_peer(
                         let _ = event_tx_recv.send(PeerEvent::TransferComplete {
                             status: FileTransferStatus::HashFailed,
                         });
+                        break;
                     }
                 }
+            } else {
+                if let Ok(Err(e)) = writer_result {
+                    tracing::error!("Disk writer error: {e}");
+                }
+                let _ = control_tx_recv.send(ControlMessage::ReceivedFileFailed.serialize());
+                let _ = event_tx_recv.send(PeerEvent::TransferComplete {
+                    status: FileTransferStatus::Etc,
+                });
+                break;
             }
         }
     });
@@ -636,23 +676,7 @@ pub async fn run_peer(
                                 }
                                 ControlMessage::ResumeReady { offset, prefix_hash } => {
                                     if let Some((path, checksum, _)) = pending_send_path.take() {
-                                        let file_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                                        if offset == file_len {
-                                            // 100% already transferred
-                                            let _ = event_tx.send(PeerEvent::TransferProgress(ProgressInfo {
-                                                bytes_transferred: offset,
-                                                total_bytes: file_len,
-                                                speed_bytes_per_second: 0.0,
-                                                percentage: 100.0,
-                                                estimated_remaining_secs: Some(0.0),
-                                                is_completed: true,
-                                                average_speed_bytes_per_second: Some(0.0),
-                                                total_time_secs: Some(0.0),
-                                            }));
-                                            let _ = event_tx.send(PeerEvent::TransferComplete {
-                                                status: FileTransferStatus::Completed,
-                                            });
-                                        } else if offset > 0 {
+                                        if offset > 0 {
                                             let local_hash = compute_prefix_hash(Path::new(&path), RESUME_FINGERPRINT_SIZE).await.ok();
                                             if local_hash == prefix_hash {
                                                 // Verified prefix fingerprint match! Send ResumeOk and start at offset
@@ -699,6 +723,7 @@ pub async fn run_peer(
                                     });
                                 }
                                 ControlMessage::ReceivedFileFailed => {
+                                    cancel.cancel();
                                     let _ = event_tx.send(PeerEvent::TransferComplete {
                                         status: FileTransferStatus::HashFailed,
                                     });
@@ -722,15 +747,33 @@ pub async fn run_peer(
                         }
                     }
                     Ok(None) => {
-                        let _ = event_tx.send(PeerEvent::Disconnected {
-                            reason: "Peer closed connection".to_string(),
-                        });
+                        let mut reason = connection.shutdown_reason();
+                        if reason.is_none() {
+                            for _ in 0..10 {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                                reason = connection.shutdown_reason();
+                                if reason.is_some() {
+                                    break;
+                                }
+                            }
+                        }
+                        let reason = reason.unwrap_or_else(|| "Peer closed connection".to_string());
+                        let _ = event_tx.send(PeerEvent::Disconnected { reason });
                         break;
                     }
                     Err(e) => {
-                        let _ = event_tx.send(PeerEvent::Disconnected {
-                            reason: e.to_string(),
-                        });
+                        let mut reason = connection.shutdown_reason();
+                        if reason.is_none() {
+                            for _ in 0..10 {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                                reason = connection.shutdown_reason();
+                                if reason.is_some() {
+                                    break;
+                                }
+                            }
+                        }
+                        let reason = reason.unwrap_or_else(|| e.to_string());
+                        let _ = event_tx.send(PeerEvent::Disconnected { reason });
                         break;
                     }
                 }
@@ -831,53 +874,58 @@ async fn handle_accept(
     let clean_save_dir = save_dir.trim_matches(|c: char| c.is_control() || c == '\0');
     let dest_path = Path::new(clean_save_dir).join(&safe_name);
 
-    let should_resume = offered_resume && resume;
-    if should_resume && size >= RESUME_THRESHOLD_BYTES {
+    let use_part = size >= RESUME_THRESHOLD_BYTES;
+    if use_part {
         let part_path = get_part_path(&dest_path);
         *current_part_path = Some(part_path.clone());
 
-        if part_path.exists() {
-            let existing_len = std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
-            let chunk_align = FILE_CHUNK_SIZE as u64;
-            let mut aligned_offset = (existing_len / chunk_align) * chunk_align;
-            if aligned_offset > size {
-                aligned_offset = 0;
-            }
-
-            if aligned_offset > 0 {
-                // Truncate to aligned chunk boundary
-                if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&part_path) {
-                    let _ = f.set_len(aligned_offset);
+        let should_resume = offered_resume && resume;
+        if should_resume {
+            if part_path.exists() {
+                let existing_len = std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
+                let chunk_align = FILE_CHUNK_SIZE as u64;
+                let mut aligned_offset = (existing_len / chunk_align) * chunk_align;
+                if aligned_offset > size {
+                    aligned_offset = 0;
                 }
-                let fingerprint = compute_prefix_hash(&part_path, RESUME_FINGERPRINT_SIZE)
+
+                if aligned_offset > 0 {
+                    // Truncate to aligned chunk boundary
+                    if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&part_path) {
+                        let _ = f.set_len(aligned_offset);
+                    }
+                    let fingerprint = compute_prefix_hash(&part_path, RESUME_FINGERPRINT_SIZE)
+                        .await
+                        .ok();
+                    *pending_resume_recv = Some((dest_path, size, checksum, aligned_offset, true));
+                    let _ = control_tx.send(
+                        ControlMessage::ResumeReady {
+                            offset: aligned_offset,
+                            prefix_hash: fingerprint,
+                        }
+                        .serialize(),
+                    );
+                    return;
+                }
+            } else if dest_path.exists()
+                && std::fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0) == size
+            {
+                let fingerprint = compute_prefix_hash(&dest_path, RESUME_FINGERPRINT_SIZE)
                     .await
                     .ok();
-                *pending_resume_recv = Some((dest_path, size, checksum, aligned_offset, true));
+                *pending_resume_recv = Some((dest_path, size, checksum, size, false));
                 let _ = control_tx.send(
                     ControlMessage::ResumeReady {
-                        offset: aligned_offset,
+                        offset: size,
                         prefix_hash: fingerprint,
                     }
                     .serialize(),
                 );
-            } else {
-                let _ = recv_file_trigger_tx.send((dest_path, size, checksum, 0, true));
-                let _ = control_tx.send(ControlMessage::Ready.serialize());
+                return;
             }
-        } else if dest_path.exists()
-            && std::fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0) == size
-        {
-            let _ = control_tx.send(
-                ControlMessage::ResumeReady {
-                    offset: size,
-                    prefix_hash: None,
-                }
-                .serialize(),
-            );
-        } else {
-            let _ = recv_file_trigger_tx.send((dest_path, size, checksum, 0, true));
-            let _ = control_tx.send(ControlMessage::Ready.serialize());
         }
+        let _ = recv_file_trigger_tx.send((dest_path, size, checksum, 0, true));
+        let _ = control_tx.send(ControlMessage::Ready.serialize());
     } else {
         *current_part_path = None;
         let _ = recv_file_trigger_tx.send((dest_path, size, checksum, 0, false));
@@ -904,6 +952,12 @@ async fn read_control_message(stream: &mut MsQuicRecvStream) -> Result<Option<St
         Err(e) => return Err(e.into()),
     }
     let len = u32::from_be_bytes(len_buf) as usize;
+    if len > crate::types::MAX_CONTROL_MESSAGE_BYTES {
+        anyhow::bail!(
+            "control message length {len} exceeds maximum allowed {}",
+            crate::types::MAX_CONTROL_MESSAGE_BYTES
+        );
+    }
     if len == 0 {
         return Ok(Some(String::new()));
     }

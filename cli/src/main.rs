@@ -70,6 +70,7 @@ pub enum TransportPreference {
     Ssh,
 }
 
+#[derive(Clone)]
 struct OutputOptions {
     quiet: bool,
     json: bool,
@@ -84,18 +85,99 @@ struct OutputOptions {
     ssh_identity: Option<String>,
 }
 
+pub mod exit_codes {
+    pub const SUCCESS: i32 = 0;
+    pub const GENERAL_ERROR: i32 = 1;
+    pub const INVALID_INVOCATION: i32 = 2;
+    pub const AUTH_FAILURE: i32 = 3;
+    pub const NETWORK_FAILURE: i32 = 4;
+    pub const INTEGRITY_FAILURE: i32 = 5;
+    pub const CONFLICT_REFUSAL: i32 = 6;
+    pub const PROTOCOL_INCOMPATIBLE: i32 = 7;
+    pub const CANCELLED: i32 = 130;
+}
+
 #[derive(Debug)]
 struct CliFailure {
     code: i32,
     message: String,
 }
 
+#[allow(dead_code)]
 impl CliFailure {
     fn new(code: i32, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
         }
+    }
+    fn invalid_invocation(msg: impl Into<String>) -> Self {
+        Self::new(exit_codes::INVALID_INVOCATION, msg)
+    }
+    fn auth(msg: impl Into<String>) -> Self {
+        Self::new(exit_codes::AUTH_FAILURE, msg)
+    }
+    fn network(msg: impl Into<String>) -> Self {
+        Self::new(exit_codes::NETWORK_FAILURE, msg)
+    }
+    fn integrity(msg: impl Into<String>) -> Self {
+        Self::new(exit_codes::INTEGRITY_FAILURE, msg)
+    }
+    fn conflict(msg: impl Into<String>) -> Self {
+        Self::new(exit_codes::CONFLICT_REFUSAL, msg)
+    }
+    fn protocol(msg: impl Into<String>) -> Self {
+        Self::new(exit_codes::PROTOCOL_INCOMPATIBLE, msg)
+    }
+    fn cancelled() -> Self {
+        Self::new(exit_codes::CANCELLED, "transfer cancelled by user")
+    }
+}
+
+fn classify_error_message(msg: &str) -> i32 {
+    let lower = msg.to_lowercase();
+    if lower.contains("protocol")
+        || lower.contains("incompatible")
+        || lower.contains("does not support")
+        || lower.contains("missing feature")
+    {
+        exit_codes::PROTOCOL_INCOMPATIBLE
+    } else if lower.contains("thumbprint")
+        || lower.contains("certificate")
+        || lower.contains("unauthorized")
+        || lower.contains("tls alert")
+        || lower.contains("handshake")
+        || lower.contains("wrong daemon pin")
+        || lower.contains("rogue")
+    {
+        exit_codes::AUTH_FAILURE
+    } else if lower.contains("checksum")
+        || lower.contains("hash mismatch")
+        || lower.contains("integrity")
+        || lower.contains("hashfailed")
+    {
+        exit_codes::INTEGRITY_FAILURE
+    } else if lower.contains("refused")
+        || lower.contains("refuse")
+        || lower.contains("already exists")
+        || lower.contains("conflict")
+        || lower.contains("symlink")
+        || lower.contains("traversal")
+    {
+        exit_codes::CONFLICT_REFUSAL
+    } else if lower.contains("network")
+        || lower.contains("connection")
+        || lower.contains("connect")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("unreachable")
+        || lower.contains("exhausted")
+        || lower.contains("udp transport failed")
+        || lower.contains("ssh probe failed")
+    {
+        exit_codes::NETWORK_FAILURE
+    } else {
+        exit_codes::GENERAL_ERROR
     }
 }
 
@@ -109,13 +191,25 @@ impl std::error::Error for CliFailure {}
 
 impl From<anyhow::Error> for CliFailure {
     fn from(error: anyhow::Error) -> Self {
-        Self::new(1, error.to_string())
+        let msg = error.to_string();
+        let code = classify_error_message(&msg);
+        Self::new(code, msg)
     }
 }
 
 impl From<std::io::Error> for CliFailure {
     fn from(error: std::io::Error) -> Self {
-        Self::new(1, error.to_string())
+        let msg = error.to_string();
+        let code = match error.kind() {
+            std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::NotConnected
+            | std::io::ErrorKind::TimedOut => exit_codes::NETWORK_FAILURE,
+            std::io::ErrorKind::PermissionDenied => exit_codes::CONFLICT_REFUSAL,
+            _ => exit_codes::GENERAL_ERROR,
+        };
+        Self::new(code, msg)
     }
 }
 
@@ -545,6 +639,31 @@ struct WorkerBootstrap {
     remote_thumbprint: String,
     host: String,
     public_udp_addr: Option<std::net::SocketAddr>,
+    protocol_version: Option<u32>,
+    features: Vec<String>,
+}
+
+impl WorkerBootstrap {
+    fn has_feature(&self, feature: &str) -> bool {
+        match self.protocol_version {
+            Some(_) => self.features.iter().any(|f| f == feature),
+            None => {
+                matches!(
+                    feature,
+                    quiczilla_core::types::FEATURE_CHECKSUM | quiczilla_core::types::FEATURE_RESUME
+                )
+            }
+        }
+    }
+
+    fn ensure_feature(&self, feature: &str, description: &str) -> CliResult<()> {
+        if !self.has_feature(feature) {
+            return Err(CliFailure::protocol(format!(
+                "Remote worker does not support {description} (missing feature '{feature}'). Update the remote worker to continue."
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[tokio::main]
@@ -596,13 +715,12 @@ async fn run() -> CliResult<()> {
 
     if args.len() < 2 {
         print_usage();
-        return Err(CliFailure::new(
-            2,
+        return Err(CliFailure::invalid_invocation(
             "a command or transfer arguments are required",
         ));
     }
     if let Err(error) = strict_validate_args(&args) {
-        return Err(CliFailure::new(2, error.to_string()));
+        return Err(CliFailure::invalid_invocation(error.to_string()));
     }
 
     let output = OutputOptions::from_args(&args)?;
@@ -730,7 +848,7 @@ fn print_pipe_usage() {
 async fn run_file_transfer_cli(args: &[String], output: OutputOptions) -> CliResult<()> {
     if args.len() < 2 {
         print_usage();
-        return Err(CliFailure::new(2, "two transfer arguments are required"));
+        return Err(CliFailure::invalid_invocation("two transfer arguments are required"));
     }
 
     let local_file_str = &args[0];
@@ -880,6 +998,13 @@ async fn run_file_transfer_cli(args: &[String], output: OutputOptions) -> CliRes
             return Err(error.into());
         }
     };
+
+    if output.resume {
+        bootstrap.ensure_feature(quiczilla_core::types::FEATURE_RESUME, "transfer resumption")?;
+    }
+    if checksum_enabled {
+        bootstrap.ensure_feature(quiczilla_core::types::FEATURE_CHECKSUM, "checksum verification")?;
+    }
 
     // Resolve both independently routable and STUN-reflexive candidates.
     // The explicit quic-host option lets users prefer a LAN, VPN, mesh, DNS,
@@ -1059,7 +1184,18 @@ async fn run_file_transfer_cli(args: &[String], output: OutputOptions) -> CliRes
                         } else {
                             transfer_completed = false;
                             renderer.failed(&format!("{:?}", status));
-                            failure = Some(CliFailure::new(1, format!("transfer failed: {status:?}")));
+                            failure = Some(match status {
+                                FileTransferStatus::HashFailed => {
+                                    CliFailure::integrity(format!("transfer failed: {status:?}"))
+                                }
+                                FileTransferStatus::RejectedAlreadyReceiving
+                                | FileTransferStatus::RejectedAlreadySending
+                                | FileTransferStatus::RejectedUnwanted => {
+                                    CliFailure::conflict(format!("transfer failed: {status:?}"))
+                                }
+                                FileTransferStatus::Cancelled => CliFailure::cancelled(),
+                                _ => CliFailure::new(exit_codes::GENERAL_ERROR, format!("transfer failed: {status:?}")),
+                            });
                         }
 
                         cancel.cancel();
@@ -1069,7 +1205,8 @@ async fn run_file_transfer_cli(args: &[String], output: OutputOptions) -> CliRes
                         if !transfer_completed {
                             renderer.failed(&reason);
                             fallback_allowed = output.transport == TransportPreference::Auto;
-                            failure = Some(CliFailure::new(1, reason));
+                            let code = classify_error_message(&reason);
+                            failure = Some(CliFailure::new(code, reason));
                             cancel.cancel();
                         }
                         break;
@@ -1093,21 +1230,63 @@ async fn run_file_transfer_cli(args: &[String], output: OutputOptions) -> CliRes
         std::process::exit(0);
     } else if fallback_allowed {
         renderer.status("UDP transport failed or timed out; falling back to SSH transfer…");
-        run_ssh_fallback(
+        if let Err(e) = run_ssh_fallback(
             local_path,
             ssh_target,
             remote_path,
             &file_name,
             file_size_bytes,
             checksum_enabled,
-            output,
+            output.clone(),
             &mut renderer,
-        )?;
-        Ok(())
+        ) {
+            renderer.failed(&e.to_string());
+            if output.json {
+                let receipt = serde_json::json!({
+                    "status": "failed",
+                    "exit_code": 1,
+                    "error": e.to_string(),
+                });
+                println!("{receipt}");
+            } else {
+                eprintln!("Error: {e}");
+            }
+            let _ = std::io::stdout().flush();
+            let _ = std::io::stderr().flush();
+            std::process::exit(1);
+        }
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        std::process::exit(0);
     } else if let Some(error) = failure {
-        Err(error)
+        if output.json {
+            let receipt = serde_json::json!({
+                "status": "failed",
+                "exit_code": error.code,
+                "error": error.message,
+            });
+            println!("{receipt}");
+        } else {
+            eprintln!("Error: {error}");
+        }
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        std::process::exit(error.code);
     } else {
-        Err(CliFailure::new(1, "transfer ended before completion"))
+        let error = CliFailure::new(1, "transfer ended before completion");
+        if output.json {
+            let receipt = serde_json::json!({
+                "status": "failed",
+                "exit_code": error.code,
+                "error": error.message,
+            });
+            println!("{receipt}");
+        } else {
+            eprintln!("Error: {error}");
+        }
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        std::process::exit(1);
     }
 }
 
@@ -1235,6 +1414,7 @@ async fn run_directory_transfer_cli(args: &[String], output: OutputOptions) -> C
         output.ssh_port,
         output.ssh_identity.as_deref(),
     )?;
+    bootstrap.ensure_feature(quiczilla_core::types::FEATURE_DIRECTORY, "directory transfers")?;
     let direct_host = output.quic_host.as_deref().unwrap_or(&bootstrap.host);
     let direct_addr = resolve_quic_address(direct_host, bootstrap.udp_port)?;
     renderer.status("Establishing encrypted directory transfer…");
@@ -1264,7 +1444,7 @@ async fn run_directory_transfer_cli(args: &[String], output: OutputOptions) -> C
     };
     tokio::pin!(send_task);
 
-    let (sent, acknowledged) = tokio::select! {
+    let (sent, acknowledged) = match tokio::select! {
         ack_res = read_directory_ack(&mut recv) => {
             let ack = ack_res?;
             let sent = match tokio::time::timeout(Duration::from_secs(5), &mut send_task).await {
@@ -1275,12 +1455,32 @@ async fn run_directory_transfer_cli(args: &[String], output: OutputOptions) -> C
                     ..Default::default()
                 },
             };
-            (sent, ack)
+            Ok::<_, anyhow::Error>((sent, ack))
         }
         send_res = &mut send_task => {
             let sent = send_res?;
             let ack = read_directory_ack(&mut recv).await?;
-            (sent, ack)
+            Ok::<_, anyhow::Error>((sent, ack))
+        }
+    } {
+        Ok(pair) => pair,
+        Err(e) => {
+            let _ = bootstrap.child.kill();
+            let _ = bootstrap.child.wait();
+            renderer.failed(&e.to_string());
+            if output.json {
+                let receipt = serde_json::json!({
+                    "status": "failed",
+                    "exit_code": 1,
+                    "error": e.to_string(),
+                });
+                println!("{receipt}");
+            } else {
+                eprintln!("Error: {e}");
+            }
+            let _ = std::io::stdout().flush();
+            let _ = std::io::stderr().flush();
+            std::process::exit(1);
         }
     };
     let elapsed = transfer_start.elapsed().as_secs_f64().max(0.001);
@@ -1362,6 +1562,15 @@ async fn run_pipe_cli(args: &[String], output: OutputOptions) -> Result<()> {
                     .map(|ip| std::net::SocketAddr::new(ip, candidate.local_port));
                 (candidate.local_port, Some(candidate.public_addr), bind_addr)
             }
+            Err(_) if output.transport == TransportPreference::Auto => {
+                if output.verbose {
+                    eprintln!("STUN discovery unavailable; continuing with direct QUIC…");
+                }
+                let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+                let port = socket.local_addr()?.port();
+                drop(socket);
+                (port, None, None)
+            }
             Err(error) => return Err(error.context("STUN transport requested for pipe mode")),
         },
         None if output.transport == TransportPreference::Stun => {
@@ -1417,6 +1626,13 @@ async fn run_pipe_cli(args: &[String], output: OutputOptions) -> Result<()> {
         output.ssh_port,
         output.ssh_identity.as_deref(),
     )?;
+    bootstrap.ensure_feature(quiczilla_core::types::FEATURE_PIPE, "pipe transfers")?;
+    if exec_cmd.is_some() {
+        bootstrap.ensure_feature(
+            quiczilla_core::types::FEATURE_EXEC_HEX,
+            "remote command execution",
+        )?;
+    }
 
     // 3. Connect via QUIC
     let direct_host = output.quic_host.as_deref().unwrap_or(&bootstrap.host);
@@ -1695,17 +1911,26 @@ async fn run_direct_cli(args: &[String], output: OutputOptions) -> CliResult<()>
                     }
                     PeerEvent::TransferComplete { status } => {
                         renderer.failed(&format!("direct transfer failed: {status:?}"));
-                        failure = Some(CliFailure::new(
-                            1,
-                            format!("direct transfer failed: {status:?}"),
-                        ));
+                        failure = Some(match status {
+                            FileTransferStatus::HashFailed => {
+                                CliFailure::integrity(format!("direct transfer failed: {status:?}"))
+                            }
+                            FileTransferStatus::RejectedAlreadyReceiving
+                            | FileTransferStatus::RejectedAlreadySending
+                            | FileTransferStatus::RejectedUnwanted => {
+                                CliFailure::conflict(format!("direct transfer failed: {status:?}"))
+                            }
+                            FileTransferStatus::Cancelled => CliFailure::cancelled(),
+                            _ => CliFailure::new(exit_codes::GENERAL_ERROR, format!("direct transfer failed: {status:?}")),
+                        });
                         cancel.cancel();
                         break;
                     }
                     PeerEvent::Disconnected { reason } if !completed => {
                         renderer.failed(&format!("direct connection failed: {reason}"));
+                        let code = classify_error_message(&reason);
                         failure = Some(CliFailure::new(
-                            1,
+                            code,
                             format!("direct connection failed: {reason}"),
                         ));
                         cancel.cancel();
@@ -1718,8 +1943,21 @@ async fn run_direct_cli(args: &[String], output: OutputOptions) -> CliResult<()>
     }
 
     if !completed {
-        return Err(failure
-            .unwrap_or_else(|| CliFailure::new(1, "direct connection closed before completion")));
+        let error = failure
+            .unwrap_or_else(|| CliFailure::new(1, "direct connection closed before completion"));
+        if output.json {
+            let receipt = serde_json::json!({
+                "status": "failed",
+                "exit_code": error.code,
+                "error": error.message,
+            });
+            println!("{receipt}");
+        } else {
+            eprintln!("Error: {error}");
+        }
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        std::process::exit(error.code);
     }
     // MsQuic owns background callbacks beyond Tokio task completion. Match the
     // SSH-bootstrap transfer path and let the OS close those native handles.
@@ -1818,7 +2056,7 @@ fn bootstrap_remote_worker(
         .arg("-o").arg("BatchMode=yes")
         .arg("-o").arg("StrictHostKeyChecking=no")
         .arg(ssh_target)
-        .arg("which quiczilla-worker 2>/dev/null || which quiczilla 2>/dev/null || which quic 2>/dev/null || [ -x ~/.local/bin/quiczilla-worker ] && echo ~/.local/bin/quiczilla-worker || [ -x ~/.local/bin/quiczilla ] && echo ~/.local/bin/quiczilla || [ -x ~/.local/bin/quic ] && echo ~/.local/bin/quic || true")
+        .arg("which quiczilla-worker 2>/dev/null || which quiczilla 2>/dev/null || which quic 2>/dev/null || [ -x \"$HOME/.local/bin/quiczilla-worker\" ] && echo \"$HOME/.local/bin/quiczilla-worker\" || [ -x \"$HOME/.local/bin/quiczilla\" ] && echo \"$HOME/.local/bin/quiczilla\" || [ -x \"$HOME/.local/bin/quic\" ] && echo \"$HOME/.local/bin/quic\" || true")
         .stdin(Stdio::null())
         .output()
         .ok();
@@ -1827,7 +2065,7 @@ fn bootstrap_remote_worker(
         let s = String::from_utf8_lossy(&out.stdout);
         s.lines()
             .map(|l| l.trim().to_string())
-            .find(|l| !l.is_empty() && (l.starts_with('/') || l.contains(":\\")))
+            .find(|l| !l.is_empty() && (l.starts_with('/') || l.starts_with('~') || l.contains(":\\")))
     });
 
     let local_worker_hash = hex::encode(Sha256::digest(worker_bytes));
@@ -1925,6 +2163,15 @@ fn bootstrap_remote_worker(
         };
 
         if !cache_hit {
+            let staging_token = format!(
+                "{}.{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            );
+            let staging_dir = format!("staging-{bundle_hash}-{staging_token}");
             if verbose {
                 eprintln!(
                     "Worker bundle cache miss; uploading {:.2} MiB",
@@ -1934,7 +2181,7 @@ fn bootstrap_remote_worker(
             upload_remote_cache_file(
                 platform,
                 ssh_target,
-                &bundle_dir,
+                &staging_dir,
                 &binary_name,
                 worker_bytes,
                 ssh_port,
@@ -1943,7 +2190,7 @@ fn bootstrap_remote_worker(
             upload_remote_cache_file(
                 platform,
                 ssh_target,
-                &bundle_dir,
+                &staging_dir,
                 runtime_name,
                 runtime_bytes,
                 ssh_port,
@@ -1952,9 +2199,17 @@ fn bootstrap_remote_worker(
             upload_remote_cache_file(
                 platform,
                 ssh_target,
-                &bundle_dir,
+                &staging_dir,
                 marker_name,
                 bundle_hash.as_bytes(),
+                ssh_port,
+                ssh_identity,
+            )?;
+            commit_remote_worker_bundle(
+                platform,
+                ssh_target,
+                &staging_dir,
+                &bundle_dir,
                 ssh_port,
                 ssh_identity,
             )?;
@@ -1978,16 +2233,42 @@ fn bootstrap_remote_worker(
     // A remote cache may be mounted `noexec`. If the managed worker exits
     // before reporting readiness, fall back to an installed worker for these
     // early alpha releases rather than bypassing the host's execution policy.
-    let (remote_port, remote_thumbprint, public_udp_addr, mut reader) = loop {
+    let (remote_port, remote_thumbprint, public_udp_addr, protocol_version, features, mut reader) = loop {
         let stdout = child
             .stdout
             .take()
             .context("Failed to capture worker stdout")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("Failed to capture worker stderr")?;
         let mut reader = BufReader::new(stdout);
         let mut remote_port = 0u16;
         let mut remote_thumbprint = String::new();
         let mut public_udp_addr = None;
+        let mut protocol_version = None;
+        let mut features = Vec::new();
         let mut line = String::new();
+
+        let stderr_lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_lines_clone = stderr_lines.clone();
+        std::thread::spawn(move || {
+            let mut err_reader = BufReader::new(stderr);
+            let mut line = String::new();
+            while let Ok(n) = err_reader.read_line(&mut line) {
+                if n == 0 {
+                    break;
+                }
+                let trimmed = line.trim();
+                if verbose && !trimmed.is_empty() {
+                    eprintln!("[Worker log] {trimmed}");
+                }
+                if let Ok(mut lines) = stderr_lines_clone.lock() {
+                    lines.push(line.clone());
+                }
+                line.clear();
+            }
+        });
 
         while reader.read_line(&mut line)? > 0 {
             let trimmed = line.trim();
@@ -2004,6 +2285,19 @@ fn bootstrap_remote_worker(
                             .get("public_udp_addr")
                             .and_then(|address| address.as_str())
                             .and_then(|address| address.parse::<std::net::SocketAddr>().ok());
+                        protocol_version = json
+                            .get("protocol_version")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as u32);
+                        features = json
+                            .get("features")
+                            .and_then(|f| f.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
                         break;
                     }
                 }
@@ -2014,7 +2308,21 @@ fn bootstrap_remote_worker(
         }
 
         if remote_port != 0 && !remote_thumbprint.is_empty() {
-            break (remote_port, remote_thumbprint, public_udp_addr, reader);
+            if let Some(ver) = protocol_version {
+                if ver < quiczilla_core::types::MIN_SUPPORTED_PROTOCOL_VERSION {
+                    anyhow::bail!(
+                        "Remote worker protocol version {ver} is incompatible (minimum supported: {}). Update the remote worker.",
+                        quiczilla_core::types::MIN_SUPPORTED_PROTOCOL_VERSION
+                    );
+                }
+                if ver > quiczilla_core::types::CURRENT_PROTOCOL_VERSION {
+                    anyhow::bail!(
+                        "Remote worker protocol version {ver} is newer than client supported version {}. Update the client.",
+                        quiczilla_core::types::CURRENT_PROTOCOL_VERSION
+                    );
+                }
+            }
+            break (remote_port, remote_thumbprint, public_udp_addr, protocol_version, features, reader);
         }
 
         let status = child.wait().ok();
@@ -2040,7 +2348,16 @@ fn bootstrap_remote_worker(
                 continue;
             }
         }
-        anyhow::bail!("Failed to obtain ready state from remote worker");
+        let err_detail = stderr_lines
+            .lock()
+            .ok()
+            .map(|l| l.join("").trim().to_string())
+            .unwrap_or_default();
+        if !err_detail.is_empty() {
+            anyhow::bail!("Failed to obtain ready state from remote worker: {err_detail}");
+        } else {
+            anyhow::bail!("Failed to obtain ready state from remote worker");
+        }
     };
 
     // Keep reader alive in background to prevent BrokenPipe on worker and forward remaining logs
@@ -2073,6 +2390,8 @@ fn bootstrap_remote_worker(
         remote_thumbprint,
         host,
         public_udp_addr,
+        protocol_version,
+        features,
     })
 }
 
@@ -2084,7 +2403,14 @@ fn remote_worker_checksum(
     ssh_identity: Option<&str>,
 ) -> Option<String> {
     let command = match platform {
-        RemotePlatform::LinuxX86_64 => format!("sha256sum -- {}", shell_quote(worker_path)),
+        RemotePlatform::LinuxX86_64 => {
+            let quoted_path = if let Some(rel) = worker_path.strip_prefix("~/") {
+                format!("$HOME/{}", shell_quote(rel))
+            } else {
+                shell_quote(worker_path)
+            };
+            format!("sha256sum -- {}", quoted_path)
+        }
         RemotePlatform::WindowsX86_64 => format!(
             "powershell -NoProfile -Command \"(Get-FileHash -Algorithm SHA256 -LiteralPath '{}').Hash\"",
             worker_path.replace('\'', "''")
@@ -2138,11 +2464,16 @@ fn run_installed_worker(
     ssh_target: &str,
     worker_path: &str,
     worker_arg_str: &str,
-    verbose: bool,
+    _verbose: bool,
     ssh_port: Option<u16>,
     ssh_identity: Option<&str>,
 ) -> Result<std::process::Child> {
-    let run_cmd = format!("{} {}", shell_quote(worker_path), worker_arg_str);
+    let quoted_path = if let Some(rel) = worker_path.strip_prefix("~/") {
+        format!("$HOME/{}", shell_quote(rel))
+    } else {
+        shell_quote(worker_path)
+    };
+    let run_cmd = format!("{} {}", quoted_path, worker_arg_str);
     ssh_command(ssh_port, ssh_identity)
         .arg("-o")
         .arg("BatchMode=yes")
@@ -2152,17 +2483,9 @@ fn run_installed_worker(
         .arg(run_cmd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(worker_stderr(verbose))
+        .stderr(Stdio::piped())
         .spawn()
         .context("Failed to start installed remote worker")
-}
-
-fn worker_stderr(verbose: bool) -> Stdio {
-    if verbose {
-        Stdio::inherit()
-    } else {
-        Stdio::null()
-    }
 }
 
 /// Upload one member of the versioned worker bundle. Keeping the native runtime
@@ -2224,6 +2547,46 @@ fn upload_remote_cache_file(
     Ok(())
 }
 
+/// Atomically publish a staged worker bundle directory to its final content-addressed path.
+fn commit_remote_worker_bundle(
+    platform: RemotePlatform,
+    ssh_target: &str,
+    staging_dir: &str,
+    bundle_dir: &str,
+    ssh_port: Option<u16>,
+    ssh_identity: Option<&str>,
+) -> Result<()> {
+    let commit_cmd = match platform {
+        RemotePlatform::LinuxX86_64 => {
+            format!(
+                "if [ -d ~/.cache/quiczilla/{bundle_dir} ]; then rm -rf ~/.cache/quiczilla/{staging_dir} 2>/dev/null || true; else mv -T ~/.cache/quiczilla/{staging_dir} ~/.cache/quiczilla/{bundle_dir} 2>/dev/null || mv ~/.cache/quiczilla/{staging_dir} ~/.cache/quiczilla/{bundle_dir} 2>/dev/null || true; rm -rf ~/.cache/quiczilla/{staging_dir} 2>/dev/null || true; fi"
+            )
+        }
+        RemotePlatform::WindowsX86_64 => {
+            format!(
+                "powershell -NoProfile -Command \"$root=Join-Path $env:LOCALAPPDATA 'quiczilla'; $staging=Join-Path $root '{staging_dir}'; $target=Join-Path $root '{bundle_dir}'; if (-not (Test-Path -LiteralPath $target)) {{ Move-Item -Path $staging -Destination $target -ErrorAction SilentlyContinue }}; if (Test-Path -LiteralPath $staging) {{ Remove-Item -Recurse -Force -LiteralPath $staging -ErrorAction SilentlyContinue }}\""
+            )
+        }
+    };
+    let output = ssh_command(ssh_port, ssh_identity)
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=no")
+        .arg(ssh_target)
+        .arg(commit_cmd)
+        .stdin(Stdio::null())
+        .output()
+        .context("Failed to commit remote worker bundle")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Remote worker-bundle commit failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_cached_worker(
     platform: RemotePlatform,
@@ -2231,7 +2594,7 @@ fn run_cached_worker(
     bundle_dir: &str,
     binary_name: &str,
     worker_arg_str: &str,
-    verbose: bool,
+    _verbose: bool,
     ssh_port: Option<u16>,
     ssh_identity: Option<&str>,
 ) -> Result<std::process::Child> {
@@ -2252,7 +2615,7 @@ fn run_cached_worker(
         .arg(run_cmd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(worker_stderr(verbose))
+        .stderr(Stdio::piped())
         .spawn()
         .context("Failed to start cached remote worker")
 }
@@ -2271,10 +2634,10 @@ fn prune_remote_worker_cache(
 ) {
     let prune_cmd = match platform {
         RemotePlatform::LinuxX86_64 => {
-            "find ~/.cache/quiczilla -mindepth 1 -maxdepth 1 -type d -name 'bundle-*' -printf '%T@ %p\\n' 2>/dev/null | sort -rn | tail -n +4 | cut -d' ' -f2- | while IFS= read -r bundle; do [ -z \"$bundle\" ] || rm -rf -- \"$bundle\"; done".to_string()
+            "find ~/.cache/quiczilla -mindepth 1 -maxdepth 1 -type d -name 'bundle-*' -printf '%T@ %p\\n' 2>/dev/null | sort -rn | tail -n +4 | cut -d' ' -f2- | while IFS= read -r bundle; do [ -z \"$bundle\" ] || rm -rf -- \"$bundle\"; done; find ~/.cache/quiczilla -mindepth 1 -maxdepth 1 -type d -name 'staging-*' -mmin +30 -exec rm -rf -- {} + 2>/dev/null || true".to_string()
         }
         RemotePlatform::WindowsX86_64 => {
-            "powershell -NoProfile -Command \"$root=Join-Path $env:LOCALAPPDATA 'quiczilla'; if (Test-Path -LiteralPath $root) { Get-ChildItem -LiteralPath $root -Directory -Filter 'bundle-*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }\"".to_string()
+            "powershell -NoProfile -Command \"$root=Join-Path $env:LOCALAPPDATA 'quiczilla'; if (Test-Path -LiteralPath $root) { Get-ChildItem -LiteralPath $root -Directory -Filter 'bundle-*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem -LiteralPath $root -Directory -Filter 'staging-*' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt (Get-Date).AddMinutes(-30) } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }\"".to_string()
         }
     };
 

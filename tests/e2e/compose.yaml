@@ -17,7 +17,9 @@ services:
     build: *qz-build
     command: ["server"]
     hostname: server
-    cap_add: [NET_ADMIN]
+    cap_add: [NET_ADMIN, SYS_ADMIN]
+    security_opt:
+      - apparmor:unconfined
     volumes:
       - keys:/keys:ro
     healthcheck:
@@ -31,7 +33,9 @@ services:
     build: *qz-build
     command: ["client"]
     hostname: client
-    cap_add: [NET_ADMIN]
+    cap_add: [NET_ADMIN, SYS_ADMIN]
+    security_opt:
+      - apparmor:unconfined
     environment:
       QZ_SERVER_HOST: server
       QZ_TOPOLOGY: t1-compose

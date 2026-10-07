@@ -12,11 +12,12 @@ trap cleanup_remote_dir EXIT
 log "Running 4 parallel SSH-bootstrapped transfers..."
 pids=()
 labels=()
+# Pre-create destination directories in a single SSH call so parallel transfers launch together
+remote "mkdir -p -- $(printf '%q ' "$REMOTE_DIR"/boot_{1..4})"
 for i in $(seq 1 4); do
   src="$WORK/parallel_boot_$i.bin"
   make_file "$src" 2097152 # 2 MiB
   dest_dir="$REMOTE_DIR/boot_$i"
-  remote "mkdir -p -- $(q "$dest_dir")"
   
   "$QZ_BIN" "$src" "$TARGET:$dest_dir/" --no-progress --checksum "${QZ_SSH_ARGS[@]}" \
     > "$CASE_DIR/boot_$i.out" 2> "$CASE_DIR/boot_$i.err" &
@@ -41,9 +42,9 @@ remote "mkdir -p $(q "$rdir/recv")"
 
 client_tp="$(client_identity "$WORK/client-identity")"
 remote "printf '# authorized\n%s\n' $client_tp > $(q "$rdir/allow")"
-remote "cd $(q "$rdir") && nohup $(q "$QZ_REMOTE_WORKER_BIN") --daemon --port $port \
+remote "cd $(q "$rdir") && (nohup $(q "$QZ_REMOTE_WORKER_BIN") --daemon --port $port \
   --allow-thumbprints allow --save-dir recv --identity-dir daemon-identity \
-  --on-conflict overwrite > daemon.out 2> daemon.err < /dev/null & echo \$! > daemon.pid"
+  --on-conflict overwrite > daemon.out 2> daemon.err < /dev/null & echo \$! > daemon.pid) >/dev/null 2>&1 < /dev/null"
 
 stop_daemon() {
   remote "if [ -f $(q "$rdir/daemon.pid") ]; then kill \$(cat $(q "$rdir/daemon.pid")) 2>/dev/null || true; fi" || true

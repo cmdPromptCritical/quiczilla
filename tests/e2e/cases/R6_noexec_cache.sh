@@ -25,7 +25,7 @@ remote "mkdir -p $(q "$cache_dir") && sudo mount -t tmpfs -o noexec tmpfs $(q "$
 
 # --- Part 1: Noexec cache WITH preinstalled worker fallback ---
 log "Testing noexec cache with pre-installed worker installed in ~/.local/bin..."
-remote "mkdir -p ~/.local/bin && cp /opt/quiczilla/quiczilla-worker ~/.local/bin/quiczilla-worker && chmod 755 ~/.local/bin/quiczilla-worker"
+remote "mkdir -p ~/.local/bin && cp /opt/quiczilla/quiczilla-worker ~/.local/bin/quiczilla-worker && cp /opt/quiczilla/libmsquic.so* ~/.local/bin/ && chmod 755 ~/.local/bin/quiczilla-worker"
 
 send_file "noexec_with_fallback" "$src" "$REMOTE_DIR/part1" --checksum
 expect_ok "noexec_with_fallback"

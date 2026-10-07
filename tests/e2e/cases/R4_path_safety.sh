@@ -23,7 +23,7 @@ mkdir -p "$local_tree"
 printf 'MALICIOUS_PAYLOAD\n' > "$local_tree/pwn_link"
 
 log "Attempting directory transfer over existing destination symlink..."
-qz attack_symlink dir "$local_tree" "$TARGET:$dest_jail/" --no-progress "${QZ_SSH_ARGS[@]}"
+qz attack_symlink "$local_tree" "$TARGET:$dest_jail/" --no-progress "${QZ_SSH_ARGS[@]}"
 
 # The receiver should fail or refuse to follow the symlink into the escape target
 if remote "test -f $(q "$escape_target/pwn_link") || test -f $(q "$escape_target/pwn_link.quic-part")"; then
@@ -53,7 +53,7 @@ printf 'normal\n' > "$tricky_dir/normal_sub/ok.txt"
 # Verify safe transfer of normal nested tree
 dest_tricky="$REMOTE_DIR/tricky_dest"
 remote "mkdir -p -- $(q "$dest_tricky")"
-qz tricky_dir dir "$tricky_dir" "$TARGET:$dest_tricky/" --no-progress "${QZ_SSH_ARGS[@]}"
+qz tricky_dir "$tricky_dir" "$TARGET:$dest_tricky/" --no-progress "${QZ_SSH_ARGS[@]}"
 expect_ok tricky_dir
 remote "test -f $(q "$dest_tricky/tricky_tree/normal_sub/ok.txt")" || fail "Normal subfolder file missing"
 

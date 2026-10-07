@@ -43,6 +43,28 @@ pub const HTTP_TIMEOUT_SECS: u64 = 5;
 pub const RESUME_THRESHOLD_BYTES: u64 = 20 * 1024 * 1024; // 20 MiB
 pub const RESUME_FINGERPRINT_SIZE: usize = 64 * 1024; // 64 KiB
 pub const PARTIAL_FILE_SUFFIX: &str = ".quic-part";
+pub const MAX_CONTROL_MESSAGE_BYTES: usize = 64 * 1024; // 64 KiB
+
+pub const CURRENT_PROTOCOL_VERSION: u32 = 1;
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
+
+pub const FEATURE_DIRECTORY: &str = "directory";
+pub const FEATURE_PIPE: &str = "pipe";
+pub const FEATURE_EXEC_HEX: &str = "exec_hex";
+pub const FEATURE_STORAGE_PROFILES: &str = "storage_profiles";
+pub const FEATURE_CONFLICT_POLICY: &str = "conflict_policy";
+pub const FEATURE_CHECKSUM: &str = "checksum";
+pub const FEATURE_RESUME: &str = "resume";
+
+pub const ALL_SUPPORTED_FEATURES: &[&str] = &[
+    FEATURE_DIRECTORY,
+    FEATURE_PIPE,
+    FEATURE_EXEC_HEX,
+    FEATURE_STORAGE_PROFILES,
+    FEATURE_CONFLICT_POLICY,
+    FEATURE_CHECKSUM,
+    FEATURE_RESUME,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlMessage {

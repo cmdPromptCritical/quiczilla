@@ -14,9 +14,9 @@ remote "mkdir -p $(q "$rdir/recv")"
 
 client_tp="$(client_identity "$WORK/client-identity")"
 remote "printf '# authorized\n%s\n' $client_tp > $(q "$rdir/allow")"
-remote "cd $(q "$rdir") && nohup $(q "$QZ_REMOTE_WORKER_BIN") --daemon --port $port \
+remote "cd $(q "$rdir") && (nohup $(q "$QZ_REMOTE_WORKER_BIN") --daemon --port $port \
   --allow-thumbprints allow --save-dir recv --identity-dir daemon-identity \
-  --on-conflict overwrite > daemon.out 2> daemon.err < /dev/null & echo \$! > daemon.pid"
+  --on-conflict overwrite > daemon.out 2> daemon.err < /dev/null & echo \$! > daemon.pid) >/dev/null 2>&1 < /dev/null"
 
 stop_daemon() {
   remote "if [ -f $(q "$rdir/daemon.pid") ]; then kill \$(cat $(q "$rdir/daemon.pid")) 2>/dev/null || true; fi" || true
@@ -65,7 +65,7 @@ for _ in range(50):
 PY
 fuzz_pid=$!
 
-wait "$transfer_pid"
+wait "$transfer_pid" && QZ_RC=0 || QZ_RC=$?
 wait "$fuzz_pid" 2>/dev/null || true
 
 expect_ok "direct_fuzz"

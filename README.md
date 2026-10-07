@@ -264,8 +264,16 @@ The default terminal display updates every 500 ms with the file name, a progress
 For automation and benchmarking, add `--json`. On successful file transfers it
 emits one JSON receipt on standard output containing the selected transport,
 payload duration, byte count, throughput, and integrity result. Human progress
-and diagnostics remain on standard error. Structured failure exit codes are
-planned as a follow-up to the transfer lifecycle refactor.
+and diagnostics remain on standard error. Automation and scripts rely on
+deterministic exit codes:
+- `0`: Success
+- `2`: Invalid CLI invocation / argument parsing error
+- `3`: Authentication / mTLS thumbprint failure
+- `4`: Network failure / timeout (all UDP & SSH fallbacks exhausted)
+- `5`: Data integrity failure (SHA-256 verification mismatch)
+- `6`: Destination conflict / file policy refusal
+- `7`: Protocol or version incompatibility
+- `130`: Transfer cancelled by user
 
 * **Hot Pause / Resume:** Press <kbd>Space</kbd> or <kbd>p</kbd> at any time during an active transfer to instantly pause transmission without closing the connection. Press <kbd>Space</kbd> or <kbd>p</kbd> again to resume. Press <kbd>q</kbd> or <kbd>Ctrl+C</kbd> to cancel.
 * **Cold Resumption (`-c`, `--resume`):** Interrupted transfers can be resumed at any time by specifying `-c` or `--resume`. For files ≥ 20 MiB, transfers stage in `<file>.quic-part` aligned to 2 MiB boundaries with a rapid 64 KiB prefix fingerprint check. If the local file changes, Quiczilla automatically falls back to restarting from byte 0.
@@ -380,8 +388,8 @@ installed worker directly. A mismatch refreshes the managed worker bundle in
 automatically uses its matching worker/runtime pair. The content-addressed
 directory never overwrites a worker that another transfer is still executing.
 If that managed location cannot execute—for example, due to a `noexec`
-policy—Quiczilla warns and uses the existing installed worker instead. Future
-releases will add an explicit protocol-compatibility check to that fallback.
+policy—Quiczilla warns and falls back to an existing installed worker with
+protocol-version and capability negotiation.
 After a managed worker starts, Quiczilla best-effort prunes its remote cache to
 the three newest content-addressed bundles (the active bundle plus two recent
 ones). Cleanup failures are non-fatal, so locked Windows executables,
@@ -430,6 +438,9 @@ An ad hoc Docker and Kubernetes test suite is available under [`tests/e2e/`](tes
 ```bash
 # Run the fast smoke suite in Docker
 ./tests/e2e/run.sh smoke
+
+# Run the complete fault injection and regression suite (R1–R11)
+./tests/e2e/run.sh regression
 
 # Run with local isolated coturn STUN sidecar
 ./tests/e2e/run.sh smoke --local-stun
