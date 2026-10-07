@@ -115,6 +115,10 @@ impl MsQuicEngine {
             settings.MaximumMtu = 1500;
             settings.__bindgen_anon_1.IsSet.set_MaximumMtu(1);
 
+            // PacingEnabled = 1
+            settings.set_PacingEnabled(1);
+            settings.__bindgen_anon_1.IsSet.set_PacingEnabled(1);
+
             // MaxWorkerQueueDelayUs = 1000
             settings.MaxWorkerQueueDelayUs = 1000;
             settings.__bindgen_anon_1.IsSet.set_MaxWorkerQueueDelayUs(1);
