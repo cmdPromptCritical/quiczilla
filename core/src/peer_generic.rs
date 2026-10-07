@@ -127,7 +127,9 @@ where
             };
 
             // Task 3a: Disk reader & optional hasher producer
-            let reader_handle = tokio::spawn(async move {
+            let std_file = file.into_std().await;
+            let reader_handle = tokio::task::spawn_blocking(move || {
+                let mut file = std_file;
                 let mut hasher = if checksum && resume_offset == 0 {
                     Some(Sha256::new())
                 } else {
@@ -141,7 +143,8 @@ where
                         return Err(anyhow::anyhow!("File read cancelled"));
                     }
 
-                    let n = match file.read(&mut buffer).await {
+                    use std::io::Read;
+                    let n = match file.read(&mut buffer) {
                         Ok(0) => break,
                         Ok(n) => n,
                         Err(e) => return Err(anyhow::anyhow!("File read error: {e}")),
@@ -152,7 +155,7 @@ where
                     }
                     total_read += n as u64;
 
-                    if chunk_tx.send(buffer[..n].to_vec()).await.is_err() {
+                    if chunk_tx.blocking_send(buffer[..n].to_vec()).is_err() {
                         return Err(anyhow::anyhow!("Stream writer disconnected"));
                     }
                 }
@@ -309,7 +312,7 @@ where
                 dest_path.clone()
             };
 
-            let mut file = if resume_offset > 0 {
+            let file = if resume_offset > 0 {
                 match tokio::fs::OpenOptions::new()
                     .read(true)
                     .write(true)
@@ -357,7 +360,8 @@ where
             let compute_inline_hash = checksum && resume_offset == 0;
 
             // Task 4a: Disk writer & optional hasher consumer
-            let writer_handle = tokio::spawn(async move {
+            let mut std_file = file.into_std().await;
+            let writer_handle = tokio::task::spawn_blocking(move || {
                 let mut hasher = if compute_inline_hash {
                     Some(Sha256::new())
                 } else {
@@ -365,7 +369,7 @@ where
                 };
                 let mut total_written = 0u64;
 
-                while let Some(chunk) = chunk_rx.recv().await {
+                while let Some(chunk) = chunk_rx.blocking_recv() {
                     if cancel_writer.is_cancelled() {
                         return Err(anyhow::anyhow!("File write cancelled"));
                     }
@@ -373,13 +377,15 @@ where
                     if let Some(ref mut h) = hasher {
                         h.update(&chunk);
                     }
-                    if let Err(e) = file.write_all(&chunk).await {
+                    use std::io::Write;
+                    if let Err(e) = std_file.write_all(&chunk) {
                         return Err(anyhow::anyhow!("File write error: {e}"));
                     }
                     total_written += chunk.len() as u64;
                 }
 
-                if let Err(e) = file.flush().await {
+                use std::io::Write;
+                if let Err(e) = std_file.flush() {
                     return Err(anyhow::anyhow!("File flush error: {e}"));
                 }
 

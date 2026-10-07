@@ -12,7 +12,7 @@ use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::types::FILE_CHUNK_SIZE;
+
 
 const FRAME_START: u8 = 0x11;
 const FRAME_DIRECTORY: u8 = 0x12;
@@ -151,12 +151,6 @@ async fn read_u32<R: AsyncRead + Unpin>(reader: &mut R) -> Result<u32> {
     Ok(u32::from_be_bytes(bytes))
 }
 
-async fn write_path<W: AsyncWrite + Unpin>(writer: &mut W, value: &str) -> Result<()> {
-    validate_relative_path(value)?;
-    write_u32(writer, value.len() as u32).await?;
-    writer.write_all(value.as_bytes()).await?;
-    Ok(())
-}
 
 async fn read_path<R: AsyncRead + Unpin>(reader: &mut R) -> Result<String> {
     let length = read_u32(reader).await? as usize;
@@ -170,10 +164,46 @@ async fn read_path<R: AsyncRead + Unpin>(reader: &mut R) -> Result<String> {
     Ok(value)
 }
 
-async fn write_pack_start<W: AsyncWrite + Unpin>(writer: &mut W, pack: u64) -> Result<()> {
-    writer.write_u8(FRAME_PACK_START).await?;
-    writer.write_all(&pack.to_be_bytes()).await?;
+
+
+fn write_u32_sync<W: std::io::Write>(writer: &mut W, value: u32) -> anyhow::Result<()> {
+    writer.write_all(&value.to_be_bytes())?;
     Ok(())
+}
+
+fn write_path_sync<W: std::io::Write>(writer: &mut W, value: &str) -> anyhow::Result<()> {
+    validate_relative_path(value)?;
+    write_u32_sync(writer, value.len() as u32)?;
+    writer.write_all(value.as_bytes())?;
+    Ok(())
+}
+
+fn write_pack_start_sync<W: std::io::Write>(writer: &mut W, pack: u64) -> anyhow::Result<()> {
+    writer.write_all(&[FRAME_PACK_START])?;
+    writer.write_all(&pack.to_be_bytes())?;
+    Ok(())
+}
+
+struct ChannelWriter {
+    tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    buffer: Vec<u8>,
+}
+impl std::io::Write for ChannelWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        if self.buffer.len() >= crate::types::FILE_CHUNK_SIZE {
+            let out = std::mem::replace(&mut self.buffer, Vec::with_capacity(crate::types::FILE_CHUNK_SIZE));
+            self.tx.blocking_send(out).map_err(|e| std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))?;
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        if !self.buffer.is_empty() {
+            let out = std::mem::replace(&mut self.buffer, Vec::with_capacity(crate::types::FILE_CHUNK_SIZE));
+            self.tx.blocking_send(out).map_err(|e| std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))?;
+        }
+        Ok(())
+    }
 }
 
 /// Stream a directory without materializing an archive or complete manifest.
@@ -193,104 +223,119 @@ pub async fn send_directory<W: AsyncWrite + Unpin>(
         .file_name()
         .context("directory transfer source has no directory name")?;
     let root_name = path_to_wire(Path::new(root_name))?;
-    writer.write_u8(FRAME_START).await?;
-    write_path(writer, &root_name).await?;
 
-    let target = profile.pack_target_bytes();
-    let mut stats = DirectoryTransferStats {
-        directories: 1,
-        packs: 1,
-        ..Default::default()
-    };
-    let mut pack_bytes = 0u64;
-    let mut pack_number = 0u64;
-    write_pack_start(writer, pack_number).await?;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
+    let source_clone = source.clone();
 
-    // A stack of open directory iterators is bounded by hierarchy depth, not
-    // by file count. It starts transferring immediately and avoids a full
-    // metadata pre-scan.
-    let mut stack = vec![std::fs::read_dir(&source).context("could not read source directory")?];
-    while !stack.is_empty() {
-        let entry = match stack.last_mut().expect("checked non-empty").next() {
-            Some(entry) => entry.context("could not enumerate source directory")?,
-            None => {
-                stack.pop();
+    let handle = tokio::task::spawn_blocking(move || -> Result<DirectoryTransferStats> {
+        let mut writer_sync = ChannelWriter { tx, buffer: Vec::with_capacity(crate::types::FILE_CHUNK_SIZE) };
+        use std::io::Write;
+
+        writer_sync.write_all(&[FRAME_START])?;
+        write_path_sync(&mut writer_sync, &root_name)?;
+
+        let target = profile.pack_target_bytes();
+        let mut stats = DirectoryTransferStats {
+            directories: 1,
+            packs: 1,
+            ..Default::default()
+        };
+        let mut pack_bytes = 0u64;
+        let mut pack_number = 0u64;
+        write_pack_start_sync(&mut writer_sync, pack_number)?;
+
+        // A stack of open directory iterators is bounded by hierarchy depth, not
+        // by file count. It starts transferring immediately and avoids a full
+        // metadata pre-scan.
+        let mut stack = vec![std::fs::read_dir(&source_clone).context("could not read source directory")?];
+        while !stack.is_empty() {
+            let entry = match stack.last_mut().expect("checked non-empty").next() {
+                Some(entry) => entry.context("could not enumerate source directory")?,
+                None => {
+                    stack.pop();
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .with_context(|| format!("could not inspect {}", path.display()))?;
+            if file_type.is_symlink() {
                 continue;
             }
-        };
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("could not inspect {}", path.display()))?;
-        if file_type.is_symlink() {
-            continue;
-        }
-        let metadata = entry
-            .metadata()
-            .with_context(|| format!("could not stat {}", path.display()))?;
-        let relative = path.strip_prefix(&source).expect("walked below source");
-        let relative = path_to_wire(relative)?;
+            let metadata = entry
+                .metadata()
+                .with_context(|| format!("could not stat {}", path.display()))?;
+            let relative = path.strip_prefix(&source_clone).expect("walked below source");
+            let relative = path_to_wire(relative)?;
 
-        if file_type.is_dir() {
-            writer.write_u8(FRAME_DIRECTORY).await?;
-            write_path(writer, &relative).await?;
-            stats.directories += 1;
-            stack.push(std::fs::read_dir(path).context("could not read nested source directory")?);
-            continue;
-        }
-        if !file_type.is_file() {
-            // Symlinks and special files are intentionally excluded until a
-            // cross-platform policy for them is designed and tested.
-            continue;
-        }
-
-        let file_size = metadata.len();
-        if pack_bytes > 0 && pack_bytes.saturating_add(file_size) > target {
-            writer.write_u8(FRAME_PACK_END).await?;
-            pack_number += 1;
-            stats.packs += 1;
-            pack_bytes = 0;
-            write_pack_start(writer, pack_number).await?;
-        }
-        writer.write_u8(FRAME_FILE).await?;
-        write_path(writer, &relative).await?;
-        writer.write_all(&file_size.to_be_bytes()).await?;
-        writer.write_u8(u8::from(checksum)).await?;
-
-        let mut file = tokio::fs::File::open(&path)
-            .await
-            .with_context(|| format!("could not open {}", path.display()))?;
-        let mut remaining = file_size;
-        let mut buffer = vec![0u8; FILE_CHUNK_SIZE];
-        let mut hasher = checksum.then(Sha256::new);
-        while remaining > 0 {
-            let limit = remaining.min(buffer.len() as u64) as usize;
-            let read = file.read(&mut buffer[..limit]).await?;
-            if read == 0 {
-                bail!(
-                    "source file changed while being transferred: {}",
-                    path.display()
-                );
+            if file_type.is_dir() {
+                writer_sync.write_all(&[FRAME_DIRECTORY])?;
+                write_path_sync(&mut writer_sync, &relative)?;
+                stats.directories += 1;
+                stack.push(std::fs::read_dir(path).context("could not read nested source directory")?);
+                continue;
             }
-            if let Some(hasher) = &mut hasher {
-                hasher.update(&buffer[..read]);
+            if !file_type.is_file() {
+                // Symlinks and special files are intentionally excluded until a
+                // cross-platform policy for them is designed and tested.
+                continue;
             }
-            writer.write_all(&buffer[..read]).await?;
-            remaining -= read as u64;
+
+            let file_size = metadata.len();
+            if pack_bytes > 0 && pack_bytes.saturating_add(file_size) > target {
+                writer_sync.write_all(&[FRAME_PACK_END])?;
+                pack_number += 1;
+                stats.packs += 1;
+                pack_bytes = 0;
+                write_pack_start_sync(&mut writer_sync, pack_number)?;
+            }
+            writer_sync.write_all(&[FRAME_FILE])?;
+            write_path_sync(&mut writer_sync, &relative)?;
+            writer_sync.write_all(&file_size.to_be_bytes())?;
+            writer_sync.write_all(&[u8::from(checksum)])?;
+
+            let mut file = std::fs::File::open(&path)
+                .with_context(|| format!("could not open {}", path.display()))?;
+            let mut remaining = file_size;
+            let mut buffer = vec![0u8; crate::types::FILE_CHUNK_SIZE];
+            let mut hasher = checksum.then(Sha256::new);
+            while remaining > 0 {
+                let limit = remaining.min(buffer.len() as u64) as usize;
+                use std::io::Read;
+                let read = file.read(&mut buffer[..limit])?;
+                if read == 0 {
+                    bail!(
+                        "source file changed while being transferred: {}",
+                        path.display()
+                    );
+                }
+                if let Some(hasher) = &mut hasher {
+                    hasher.update(&buffer[..read]);
+                }
+                writer_sync.write_all(&buffer[..read])?;
+                remaining -= read as u64;
+            }
+            if let Some(hasher) = hasher {
+                writer_sync.write_all(&hasher.finalize())?;
+            }
+            stats.files += 1;
+            stats.bytes += file_size;
+            pack_bytes += file_size;
         }
-        if let Some(hasher) = hasher {
-            writer.write_all(&hasher.finalize()).await?;
-        }
-        stats.files += 1;
-        stats.bytes += file_size;
-        pack_bytes += file_size;
+        writer_sync.write_all(&[FRAME_PACK_END])?;
+        writer_sync.write_all(&[FRAME_END])?;
+        writer_sync.write_all(&stats.files.to_be_bytes())?;
+        writer_sync.write_all(&stats.directories.to_be_bytes())?;
+        writer_sync.write_all(&stats.bytes.to_be_bytes())?;
+        writer_sync.flush()?;
+        Ok(stats)
+    });
+
+    while let Some(chunk) = rx.recv().await {
+        writer.write_all(&chunk).await?;
     }
-    writer.write_u8(FRAME_PACK_END).await?;
-    writer.write_u8(FRAME_END).await?;
-    writer.write_all(&stats.files.to_be_bytes()).await?;
-    writer.write_all(&stats.directories.to_be_bytes()).await?;
-    writer.write_all(&stats.bytes.to_be_bytes()).await?;
-    writer.flush().await?;
+    let stats = handle.await.map_err(|e| anyhow::anyhow!("Directory sender task panicked: {e}"))??;
     Ok(stats)
 }
 
@@ -359,29 +404,47 @@ pub async fn receive_directory<R: AsyncRead + Unpin>(
                     &name_lossy[..limit]
                 };
                 let partial = parent.join(format!(".{stem}.quic-part"));
-                let mut output = tokio::fs::File::create(&partial).await?;
+                
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
+                let partial_clone = partial.clone();
+                let file_task = tokio::task::spawn_blocking(move || -> Result<Option<[u8; 32]>> {
+                    let mut output = std::fs::File::create(&partial_clone)?;
+                    let mut hasher = checksum.then(Sha256::new);
+
+                    while let Some(chunk) = rx.blocking_recv() {
+                        if let Some(hasher) = &mut hasher {
+                            hasher.update(&chunk);
+                        }
+                        use std::io::Write;
+                        output.write_all(&chunk)?;
+                    }
+                    use std::io::Write;
+                    output.flush()?;
+                    drop(output);
+
+                    let actual: Option<[u8; 32]> = hasher.map(|h| h.finalize().into());
+                    Ok(actual)
+                });
+
                 let mut remaining = size;
-                let mut buffer = vec![0u8; FILE_CHUNK_SIZE];
-                let mut hasher = checksum.then(Sha256::new);
+                let mut buffer = vec![0u8; crate::types::FILE_CHUNK_SIZE];
                 while remaining > 0 {
                     let limit = remaining.min(buffer.len() as u64) as usize;
                     let read = reader.read(&mut buffer[..limit]).await?;
                     if read == 0 {
                         bail!("directory transfer ended inside file {relative}");
                     }
-                    if let Some(hasher) = &mut hasher {
-                        hasher.update(&buffer[..read]);
-                    }
-                    output.write_all(&buffer[..read]).await?;
+                    tx.send(buffer[..read].to_vec()).await.map_err(|_| anyhow::anyhow!("File write task died"))?;
                     remaining -= read as u64;
                 }
-                output.flush().await?;
-                drop(output);
+                drop(tx);
+                
+                let actual = file_task.await.map_err(|e| anyhow::anyhow!("File write task panicked: {e}"))??;
+
                 if checksum {
                     let mut expected = [0u8; 32];
                     reader.read_exact(&mut expected).await?;
-                    let actual: [u8; 32] = hasher.expect("checksum enabled").finalize().into();
-                    if actual != expected {
+                    if actual.expect("checksum enabled") != expected {
                         let _ = tokio::fs::remove_file(&partial).await;
                         bail!("directory transfer checksum mismatch for {relative}");
                     }
